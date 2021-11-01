@@ -1,7 +1,7 @@
 # End-to-End Distributionally Robust Optimization
 #
 # Prepared by:    Giorgio Costa (gc2958@columbia.edu)
-# Last revision:  30-Oct-2021
+# Last revision:  31-Oct-2021
 #
 ####################################################################################################
 ## Import libraries
@@ -16,8 +16,13 @@ import numpy as np
 ####################################################################################################
 # Define Neural network module
 ####################################################################################################
-# REGRESSION EXAMPLE
 class TableModule(nn.Module):
+    """MapTable module: 
+    https://github.com/amdegroot/pytorch-containers/blob/master/README.md#maptable
+
+    MapTable is a container for a single module which will be applied to all input elements. The
+    member module is cloned as necessary to process all input elements.
+    """
     def __init__(self, n_in, n_out):
         super(TableModule, self).__init__()
         self.layer = nn.Linear(n_in, n_out)
@@ -26,25 +31,6 @@ class TableModule(nn.Module):
         y_hat = torch.stack([self.layer(member) for member in x])
         return y_hat
 
-# COVARIANCE EXAMPLE
-class CovModule(nn.Module):
-    def __init__(self, n_in, n_out):
-        super(CovModule, self).__init__()
-        self.layer = nn.Linear(n_in, n_out)
-
-    def cov(self, x):
-        T = x.shape[-1]
-        mean = torch.mean(x, dim=-1).unsqueeze(-1)
-        x -= mean
-        return 1/T * x @ x.T
-        
-    def forward(self, x, y):
-        y_hat = torch.stack([self.layer(member) for member in x])
-        ep = y - y_hat
-        Sigma = self.cov(ep.T)
-        return Sigma, y_hat[-1]
-
-# CVXPY EXAMPLE
 class E2EModule(nn.Module):
     """End-to-end learning NN module
 
@@ -127,7 +113,6 @@ class E2EModule(nn.Module):
         z_star = torch.stack(z_star)
 
         return z_star, y_hat
-
 
 def sharpe_loss(z_star, Y):
     loss = 0
