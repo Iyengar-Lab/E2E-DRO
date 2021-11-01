@@ -36,7 +36,8 @@ class E2EModule(nn.Module):
 
     This module implements a linear prediction layer and a convex quadratic decision layer. The
     module takes the inputs and passes them through the prediction layer. The covariance matrix of
-    the corresponding residuals is then calculated. Finally, the residual covariance matrix and predictions are passed to the optimization layer to find the optimal decision z_star.
+    the corresponding residuals is then calculated. Finally, the residual covariance matrix and
+    predictions are passed to the optimization layer to find the optimal decision z_star.
 
     Inputs:
     n_x: number of features, x_t, in the prediction model
@@ -50,7 +51,8 @@ class E2EModule(nn.Module):
 
     def __init__(self, n_x, n_y, n_obs):
         """Layers in the E2E module. 'pred_layer' is a linear regression model. 'opt_layer' is a 
-        convex quadratic optimization layer based on the CVXPY and CvxpyLayer libraries. The optimization layer has the following components:
+        convex quadratic optimization layer based on the CVXPY and CvxpyLayer libraries. The
+        optimization layer has the following components:
 
         Variables and parameters
         z: Variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
