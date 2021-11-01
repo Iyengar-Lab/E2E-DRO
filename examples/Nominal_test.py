@@ -39,12 +39,12 @@ class E2EModule(nn.Module):
     the corresponding residuals is then calculated. Finally, the residual covariance matrix and
     predictions are passed to the optimization layer to find the optimal decision z_star.
 
-    Inputs:
+    Inputs
     n_x: number of features, x_t, in the prediction model
     n_obs: number of outputs, y_hat_t, from the prediction model
     n_obs: Number of observations (scenarios) in the complete dataset
 
-    Output:
+    Outputs
     z_star: (n_obs x n_y) matrix of optimal decisions per scenario
     y_hat: (n_obs x n_y) matrix of predictions
     """
@@ -59,11 +59,11 @@ class E2EModule(nn.Module):
         S: Parameter. (n_obs x n_y) matrix of centered residuals dividedd by sqrt(n_obs)
         c: Parameter. (n_y x 1) vector of predicted outcomes (e.g., conditional expected returns)
         
-        Constraints: 
+        Constraints
         Budget constraint: sum(z) = 1
         Long-only constraint: z >= 0
         
-        Problem:
+        Objective
         Minimize_z (1/2) z' * S' * S * z - c' * z
         """
         super(E2EModule, self).__init__()
@@ -79,51 +79,71 @@ class E2EModule(nn.Module):
         problem = cp.Problem(objective, constraints)
         self.opt_layer = CvxpyLayer(problem, parameters=[S, c], variables=[z])
 
-    def cov(self, x):
+    def cov(self, X):
         """Centering (de-meaning) of residuals and division by sqrt(n_obs). To be used in
-        conjuction with cp.sum_squares() to calculate the covariance matrix of the residuals
+        conjuction with cp.sum_squares() to calculate the covariance matrix of the residuals.
+
+        Input
+        X: Features. (n_obs x n_x) matrix of timeseries data
+
+        Output
+        Centered X over sqrt(n_obs)
         """
-        sqrtT = torch.sqrt(torch.as_tensor(x.shape[-1]))
-        mean = torch.mean(x, dim=-1).unsqueeze(-1)
-        x -= mean
-        return 1/sqrtT * x.T
+        sqrt_n_obs = torch.sqrt(torch.as_tensor(X.shape[-1]))
+        mean = torch.mean(X, dim=-1).unsqueeze(-1)
+        X -= mean
+        return 1/sqrt_n_obs * X.T
         
-    def forward(self, x, y):
+    def forward(self, X, Y):
         """Forward pass of the NN module. 
-        x: Inputs. (n_obs x n_x) matrix of feature data
-        y: Realizations. (n_obs x n_y) matrix of realized values.
-        y_hat: Predictions. (n_obs x n_y) matrix of outputs of the prediction layer
+        X: Features. (n_obs x n_x) matrix of timeseries data
+        Y: Realizations. (n_obs x n_y) matrix of realized values.
+        Y_hat: Predictions. (n_obs x n_y) matrix of outputs of the prediction layer
         ep: Residuals. (n_obs x n_y) matrix of the residual between realizations and predictions
         ep_bar: Centered residuals. (n_obs x n_y) matrix of centered residuals divided by sqrt
         (n_obs)
         z_star: Optimal solution. (n_obs x n_y) matrix of optimal decisions. Each row corresponds
-        to a single scenario y_hat_t, i.e., we ran the optimizer 'n_obs' times to find a 'z_prime'
-        solution per y_hat_t. z_prime solutions are stacked into z_star.
+        to a single scenario Y_hat_t, i.e., we ran the optimizer 'n_obs' times to find a 'z_t'
+        solution per Y_hat_t. z_t solutions are stacked into z_star.
         """
         # Predict y_hat from x
-        y_hat = torch.stack([self.pred_layer(member) for member in x])
+        Y_hat = torch.stack([self.pred_layer(member) for member in X])
 
         # Calculate residuals and process them
-        ep = y - y_hat
+        ep = Y - Y_hat
         ep_bar = self.cov(ep.T)
 
-        # Optimize z_prime per scenario, aggregate solutions into z_star
+        # Optimize z_t per scenario, aggregate solutions into z_star
         z_star = []
-        for member in y_hat:
-            z_prime, = self.opt_layer(ep_bar, member)
-            z_star.append(z_prime)
+        for member in Y_hat:
+            z_t, = self.opt_layer(ep_bar, member)
+            z_star.append(z_t)
         z_star = torch.stack(z_star)
 
-        return z_star, y_hat
+        return z_star, Y_hat
 
 def sharpe_loss(z_star, Y):
+    """Loss function based on the out-of-sample Sharpe ratio
+
+    Compute the out-of-sample Sharpe ratio of the portfolio z_t over the next 12 time steps. The
+    loss is aggregated for all z_t in z_star and averaged over the number of observations. We use a
+    simplified version of the Sharpe ratio, SR = realized mean / realized std dev.
+
+    Inputs
+    z_star: Optimal solution. (n_obs x n_y) matrix of optimal decisions. Each row of z_star is z_t
+    for t = 1, ..., T. 
+    Y: Realizations. (n_obs x n_y) matrix of realized values.
+
+    Output
+    Aggregate loss for all t = 1, ..., T, divided by n_obs
+    """
     loss = 0
     i = -1
     time_step = 12
-    for z in z_star:
+    for z_t in z_star:
         i += 1
         Y_t = Y[i:time_step+i]
-        loss += -torch.mean(Y_t @ z) / torch.std(Y_t @ z)
+        loss += -torch.mean(Y_t @ z_t) / torch.std(Y_t @ z_t)
     return loss / i
 
 ####################################################################################################
