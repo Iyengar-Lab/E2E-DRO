@@ -16,22 +16,7 @@ import numpy as np
 ####################################################################################################
 # Define Neural network module
 ####################################################################################################
-class TableModule(nn.Module):
-    """MapTable module: 
-    https://github.com/amdegroot/pytorch-containers/blob/master/README.md#maptable
-
-    MapTable is a container for a single module which will be applied to all input elements. The
-    member module is cloned as necessary to process all input elements.
-    """
-    def __init__(self, n_in, n_out):
-        super(TableModule, self).__init__()
-        self.layer = nn.Linear(n_in, n_out)
-        
-    def forward(self, x):
-        y_hat = torch.stack([self.layer(member) for member in x])
-        return y_hat
-
-class E2EModule(nn.Module):
+class E2E_DRO_Module(nn.Module):
     """End-to-end learning NN module
 
     This module implements a linear prediction layer and a convex quadratic decision layer. The
@@ -50,49 +35,76 @@ class E2EModule(nn.Module):
     """
 
     def __init__(self, n_x, n_y, n_obs):
-        """Layers in the E2E module. 'pred_layer' is a linear regression model. 'opt_layer' is a 
-        convex quadratic optimization layer based on the CVXPY and CvxpyLayer libraries. The
-        optimization layer has the following components:
-
-        Variables and parameters
+        """Layers in the E2E module. 'pred_layer' is a linear regression model. 'z_opt_layer' is 
+        the convex quadratic optimization layer of the decision variable z. 'p_opt_layer' is the concave quadratic optimization layer of the adversarial probability variable p. 
+        
+        The z_opt_layer layer has the following components:
         z: Variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
         S: Parameter. (n_obs x n_y) matrix of centered residuals dividedd by sqrt(n_obs)
         c: Parameter. (n_y x 1) vector of predicted outcomes (e.g., conditional expected returns)
-        
-        Constraints
-        Budget constraint: sum(z) = 1
-        Long-only constraint: z >= 0
-        
-        Objective
-        Minimize_z (1/2) z' * S' * S * z - c' * z
+        Cconstraint: Total budget is equal to 100%, sum(z) == 1
+        Cconstraint: Long-only positions (no short sales), z >= 0
+        Objective: Minimize_z (1/2) z' * S' * S * z - c' * z
         """
-        super(E2EModule, self).__init__()
-        # Linear prediction layer
+        super(E2E_DRO_Module, self).__init__()
+        # LAYER: Linear prediction
         self.pred_layer = nn.Linear(n_x, n_y)
 
-        # Optimization layer
+        # LAYER: Optimization
+        # Variables
         z = cp.Variable(n_y)
-        S = cp.Parameter((n_obs, n_y))
-        c = cp.Parameter(n_y)
-        constraints = [z >= 0, sum(z)==1]
-        objective = cp.Minimize(0.5 * cp.sum_squares(S @ z) - c.T @ z)
-        problem = cp.Problem(objective, constraints)
-        self.opt_layer = CvxpyLayer(problem, parameters=[S, c], variables=[z])
+        c_aux = cp.Variable()
+        lambda_aux = cp.Variable()
+        eta_aux = cp.Variable()
+        pi_aux = cp.Variable(n_obs)
 
-    def cov(self, ep):
+        # Parameters
+        ep = cp.Parameter((n_obs, n_y))
+        y_hat = cp.Parameter(n_y)
+        rho = cp.Parameter(1, nonneg=True)
+
+        # Constraints
+        constraints = [z >= 0, 
+                    sum(z)==1,
+                    lambda_aux >= 0]
+        obj_expr = 0
+        for i in range(n_obs):
+            constraints += [(ep[i].T @ z - c_aux)**2 <= lambda_aux + eta_aux]
+            # obj_expr += self.cvx_conjugate( ((ep[i].T @ z - c_aux)**2 - eta_aux) / lambda_aux )
+            obj_expr +=  self.cvx_conjugate((ep[i].T @ z - c_aux)**2 - eta_aux)
+
+            # constraints += [pi_aux[i] == ep[i].T @ z - c_aux]
+            # constraints += [pi_aux[i]**2 <= lambda_aux + eta_aux]
+            # obj_expr += self.cvx_conjugate( (pi_aux[i]**2 - eta_aux) / lambda_aux )
+
+        # objective = cp.Minimize(eta_aux + rho*lambda_aux + (lambda_aux/n_obs)*obj_expr - y_hat.T @ z)
+        objective = cp.Minimize(eta_aux + rho*lambda_aux + (1/n_obs)*obj_expr - y_hat.T @ z)
+
+        problem = cp.Problem(objective, constraints)
+        self.z_opt_layer = CvxpyLayer(problem, parameters=[ep, y_hat, rho], variables=[z])
+
+    def cvx_conjugate(self, s):
+        # return s / (1-s)
+        return s
+
+    def p_weighted(self, ep, p):
         """Centering (de-meaning) of residuals and division by sqrt(n_obs). To be used in
         conjuction with cp.sum_squares() to calculate the covariance matrix of the residuals.
 
         Input
         ep: (n_obs x n_y) matrix of residuals
+        p: (n_obs x 1) vector of probabilities (discrete PMF)
 
         Output
-        Centered ep over sqrt(n_obs)
+        mu: (n_y x 1) vector of p-weighted average of residuals
+        Sigma_sqrt: (n_y x n_obs) matrix, where Sigma_sqrt.T @ Sigma_sqrt = p-weighted covariance
+        matrix.
         """
-        sqrt_n_obs = torch.sqrt(torch.as_tensor(ep.shape[-1]))
-        mean = torch.mean(ep, dim=-1).unsqueeze(-1)
-        ep -= mean
-        return 1/sqrt_n_obs * ep.T
+        mu = ep.T @ p
+        ep -= mu
+        Sigma_sqrt = p.sqrt().diag() @ ep.T
+
+        return mu, Sigma_sqrt
         
     def forward(self, X, Y):
         """Forward pass of the NN module. 
@@ -111,12 +123,12 @@ class E2EModule(nn.Module):
 
         # Calculate residuals and process them
         ep = Y - Y_hat
-        ep_bar = self.cov(ep.T)
 
         # Optimize z_t per scenario, aggregate solutions into z_star
         z_star = []
+        rho = 0.1
         for member in Y_hat:
-            z_t, = self.opt_layer(ep_bar, member)
+            z_t, = self.z_opt_layer(ep, member, rho)
             z_star.append(z_t)
         z_star = torch.stack(z_star)
 
@@ -177,7 +189,7 @@ X, Y = X[0:T], Y[0:T]
 # Train neural net
 #---------------------------------------------------------------------------------------------------
 # Define the neural net
-e2enet = E2EModule(n_x=m, n_y=n, n_obs=T)     
+e2enet = E2E_DRO_Module(n_x=m, n_y=n, n_obs=T)     
 
 # Define the optimizer and its parameters
 optimizer = torch.optim.Adam(e2enet.parameters(), lr=0.1)
