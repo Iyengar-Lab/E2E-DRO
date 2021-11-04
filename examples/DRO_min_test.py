@@ -35,16 +35,34 @@ class E2E_DRO_Module(nn.Module):
     """
 
     def __init__(self, n_x, n_y, n_obs):
-        """Layers in the E2E module. 'pred_layer' is a linear regression model. 'z_opt_layer' is 
-        the convex quadratic optimization layer of the decision variable z. 'p_opt_layer' is the concave quadratic optimization layer of the adversarial probability variable p. 
+        """Layers in the E2E module. 'pred_layer' is a linear regression model. 'z_opt_layer' is
+        the optimization layer of the decision variable z and is based on a tractable reformulation
+        of the DRO model from Ben-Tal et al. (2013). The probability ambiguity set is based on the
+        Total Variation distance measure between the adversarial distribution p and the nominal
+        distribution q.
         
-        The z_opt_layer layer has the following components:
-        z: Variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
-        S: Parameter. (n_obs x n_y) matrix of centered residuals dividedd by sqrt(n_obs)
-        c: Parameter. (n_y x 1) vector of predicted outcomes (e.g., conditional expected returns)
-        Cconstraint: Total budget is equal to 100%, sum(z) == 1
-        Cconstraint: Long-only positions (no short sales), z >= 0
-        Objective: Minimize_z (1/2) z' * S' * S * z - c' * z
+        The z_opt_layer layer has the following components.
+
+        Variables
+        z: Decision variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
+        c_aux: Auxiliary Variable. Scalar. Allows us to p-linearize the derivation of the variance
+        lambda_aux: Auxiliary Variable. Scalar. Allows for a tractable DR counterpart.
+        eta_aux: Auxiliary Variable. Scalar. Allows for a tractable DR counterpart.
+        obj_aux: Auxiliary Variable. (n_obs x 1) vector. Allows for a tractable DR counterpart.
+
+        Parameters
+        ep: (n_obs x n_y) matrix of residuals 
+        y_hat: (n_y x 1) vector of predicted outcomes (e.g., conditional expected
+        returns)
+        rho: Scalar. Maximum distance between p and q.
+
+        constraints
+        Total budget is equal to 100%, sum(z) == 1
+        Long-only positions (no short sales), z >= 0
+        All other constraints allow for a tractable DR counterpart. See the Appendix in Ben-Tal et al. (2013).
+
+        Objective
+        Minimize ta_aux + rho*lambda_aux + (1/n_obs)*sum(obj_aux) - y_hat.T @ z
         """
         super(E2E_DRO_Module, self).__init__()
         # LAYER: Linear prediction
@@ -84,8 +102,6 @@ class E2E_DRO_Module(nn.Module):
         Y: Realizations. (n_obs x n_y) matrix of realized values.
         Y_hat: Predictions. (n_obs x n_y) matrix of outputs of the prediction layer
         ep: Residuals. (n_obs x n_y) matrix of the residual between realizations and predictions
-        ep_bar: Centered residuals. (n_obs x n_y) matrix of centered residuals divided by sqrt
-        (n_obs)
         Z_star: Optimal solution. (n_obs x n_y) matrix of optimal decisions. Each row corresponds
         to a single scenario Y_hat_t, i.e., we ran the optimizer 'n_obs' times to find a 'z_t'
         solution per Y_hat_t. z_t solutions are stacked into Z_star.
