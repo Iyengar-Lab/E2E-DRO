@@ -22,7 +22,7 @@ class E2E_DRO_Module(nn.Module):
     This module implements a linear prediction layer and a convex quadratic decision layer. The
     module takes the inputs and passes them through the prediction layer. The covariance matrix of
     the corresponding residuals is then calculated. Finally, the residual covariance matrix and
-    predictions are passed to the optimization layer to find the optimal decision z_star.
+    predictions are passed to the optimization layer to find the optimal decision Z_star.
 
     Inputs
     n_x: number of features, x_t, in the prediction model
@@ -30,7 +30,7 @@ class E2E_DRO_Module(nn.Module):
     n_obs: Number of observations (scenarios) in the complete dataset
 
     Outputs
-    z_star: (n_obs x n_y) matrix of optimal decisions per scenario
+    Z_star: (n_obs x n_y) matrix of optimal decisions per scenario
     y_hat: (n_obs x n_y) matrix of predictions
     """
 
@@ -52,11 +52,11 @@ class E2E_DRO_Module(nn.Module):
 
         # LAYER: Optimization
         # Variables
-        z = cp.Variable(n_y)
+        z = cp.Variable(n_y, nonneg=True)
         c_aux = cp.Variable()
-        lambda_aux = cp.Variable()
+        lambda_aux = cp.Variable(1, nonneg=True)
         eta_aux = cp.Variable()
-        pi_aux = cp.Variable(n_obs)
+        obj_aux = cp.Variable(n_obs)
 
         # Parameters
         ep = cp.Parameter((n_obs, n_y))
@@ -64,49 +64,21 @@ class E2E_DRO_Module(nn.Module):
         rho = cp.Parameter(1, nonneg=True)
 
         # Constraints
-        constraints = [z >= 0, 
-                    sum(z)==1,
-                    lambda_aux >= 0]
-        obj_expr = 0
+        constraints = [sum(z)==1,
+                    obj_aux >= -lambda_aux]
         for i in range(n_obs):
-            constraints += [(ep[i].T @ z - c_aux)**2 <= lambda_aux + eta_aux]
-            # obj_expr += self.cvx_conjugate( ((ep[i].T @ z - c_aux)**2 - eta_aux) / lambda_aux )
-            obj_expr +=  self.cvx_conjugate((ep[i].T @ z - c_aux)**2 - eta_aux)
+            constraints += [obj_aux[i] >= -lambda_aux]
+            constraints += [obj_aux[i] >= (ep[i].T @ z - c_aux)**2 - eta_aux]
+            constraints += [(ep[i].T @ z - c_aux)**2 - eta_aux <= lambda_aux]
 
-            # constraints += [pi_aux[i] == ep[i].T @ z - c_aux]
-            # constraints += [pi_aux[i]**2 <= lambda_aux + eta_aux]
-            # obj_expr += self.cvx_conjugate( (pi_aux[i]**2 - eta_aux) / lambda_aux )
+        # Objective function
+        objective = cp.Minimize(eta_aux + rho*lambda_aux + (1/n_obs)*sum(obj_aux) - y_hat.T @ z)
 
-        # objective = cp.Minimize(eta_aux + rho*lambda_aux + (lambda_aux/n_obs)*obj_expr - y_hat.T @ z)
-        objective = cp.Minimize(eta_aux + rho*lambda_aux + (1/n_obs)*obj_expr - y_hat.T @ z)
-
+        # Construct optimization problem and differentiable layer
         problem = cp.Problem(objective, constraints)
         self.z_opt_layer = CvxpyLayer(problem, parameters=[ep, y_hat, rho], variables=[z])
-
-    def cvx_conjugate(self, s):
-        # return s / (1-s)
-        return s
-
-    def p_weighted(self, ep, p):
-        """Centering (de-meaning) of residuals and division by sqrt(n_obs). To be used in
-        conjuction with cp.sum_squares() to calculate the covariance matrix of the residuals.
-
-        Input
-        ep: (n_obs x n_y) matrix of residuals
-        p: (n_obs x 1) vector of probabilities (discrete PMF)
-
-        Output
-        mu: (n_y x 1) vector of p-weighted average of residuals
-        Sigma_sqrt: (n_y x n_obs) matrix, where Sigma_sqrt.T @ Sigma_sqrt = p-weighted covariance
-        matrix.
-        """
-        mu = ep.T @ p
-        ep -= mu
-        Sigma_sqrt = p.sqrt().diag() @ ep.T
-
-        return mu, Sigma_sqrt
         
-    def forward(self, X, Y):
+    def forward(self, X, Y, rho):
         """Forward pass of the NN module. 
         X: Features. (n_obs x n_x) matrix of timeseries data
         Y: Realizations. (n_obs x n_y) matrix of realized values.
@@ -114,9 +86,9 @@ class E2E_DRO_Module(nn.Module):
         ep: Residuals. (n_obs x n_y) matrix of the residual between realizations and predictions
         ep_bar: Centered residuals. (n_obs x n_y) matrix of centered residuals divided by sqrt
         (n_obs)
-        z_star: Optimal solution. (n_obs x n_y) matrix of optimal decisions. Each row corresponds
+        Z_star: Optimal solution. (n_obs x n_y) matrix of optimal decisions. Each row corresponds
         to a single scenario Y_hat_t, i.e., we ran the optimizer 'n_obs' times to find a 'z_t'
-        solution per Y_hat_t. z_t solutions are stacked into z_star.
+        solution per Y_hat_t. z_t solutions are stacked into Z_star.
         """
         # Predict y_hat from x
         Y_hat = torch.stack([self.pred_layer(member) for member in X])
@@ -124,25 +96,27 @@ class E2E_DRO_Module(nn.Module):
         # Calculate residuals and process them
         ep = Y - Y_hat
 
-        # Optimize z_t per scenario, aggregate solutions into z_star
-        z_star = []
-        rho = 0.1
+        # Optimization solver arguments (from CVXPY for SCS solver)
+        solver_args = {'eps': 1e-10, 'acceleration_lookback': 0}
+
+        # Optimize z_t per scenario, aggregate solutions into Z_star
+        Z_star = []
         for member in Y_hat:
-            z_t, = self.z_opt_layer(ep, member, rho)
-            z_star.append(z_t)
-        z_star = torch.stack(z_star)
+            z_t, = self.z_opt_layer(ep, member, rho, solver_args=solver_args)
+            Z_star.append(z_t.detach())
+        Z_star = torch.stack(Z_star)
 
-        return z_star, Y_hat
+        return Z_star, Y_hat
 
-def sharpe_loss(z_star, Y):
+def sharpe_loss(Z_star, Y):
     """Loss function based on the out-of-sample Sharpe ratio
 
     Compute the out-of-sample Sharpe ratio of the portfolio z_t over the next 12 time steps. The
-    loss is aggregated for all z_t in z_star and averaged over the number of observations. We use a
+    loss is aggregated for all z_t in Z_star and averaged over the number of observations. We use a
     simplified version of the Sharpe ratio, SR = realized mean / realized std dev.
 
     Inputs
-    z_star: Optimal solution. (n_obs x n_y) matrix of optimal decisions. Each row of z_star is z_t
+    Z_star: Optimal solution. (n_obs x n_y) matrix of optimal decisions. Each row of Z_star is z_t
     for t = 1, ..., T. 
     Y: Realizations. (n_obs x n_y) matrix of realized values.
 
@@ -152,14 +126,14 @@ def sharpe_loss(z_star, Y):
     loss = 0
     i = -1
     time_step = 12
-    for z_t in z_star:
+    for z_t in Z_star:
         i += 1
         Y_t = Y[i:time_step+i]
         loss += -torch.mean(Y_t @ z_t) / torch.std(Y_t @ z_t)
     return loss / i
 
 ####################################################################################################
-# EXAMPLE: Nominal E2E learning
+# EXAMPLE: E2E DRO 
 ####################################################################################################
 
 #---------------------------------------------------------------------------------------------------
@@ -200,14 +174,17 @@ pred_loss = torch.nn.MSELoss()
 # Out-of-sample performance loss function
 perf_loss = sharpe_loss
 
+# TO-DO: Make the ambiguity set sizing parameter 'rho' learnable by the neural net
+rho = torch.tensor([0.1])
+
 # Train the neural network
-for t in range(200):
+for t in range(5):
   
     # Input X, predict Y_hat, and optimize to maximize the conditional expectation
-    z_star, Y_hat = e2enet(X, Y)     
+    Z_star, Y_hat = e2enet(X, Y, rho)     
 
     # Loss function: Combination of out-of-sample preformance and prediction
-    loss = perf_loss(z_star, Y_test) + pred_loss(Y_hat, Y)
+    loss = perf_loss(Z_star, Y_test) + pred_loss(Y_hat, Y)
 
     # Backpropagation: Clear previous gradients, compute new gradients, update
     optimizer.zero_grad() 
@@ -217,6 +194,9 @@ for t in range(200):
     # Print loss after every iteration
     print(loss.data.numpy())
 
-
+# Check the optimal parameters from the neural net
+for name, param in e2enet.named_parameters():
+    if param.requires_grad:
+        print(name, param.grad)
 
 

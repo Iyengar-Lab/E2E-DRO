@@ -56,7 +56,7 @@ class E2EModule(nn.Module):
 
         Variables and parameters
         z: Variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
-        S: Parameter. (n_obs x n_y) matrix of centered residuals dividedd by sqrt(n_obs)
+        S: Parameter. (n_obs x n_y) matrix of centered residuals divided by sqrt(n_obs)
         c: Parameter. (n_y x 1) vector of predicted outcomes (e.g., conditional expected returns)
         
         Constraints
