@@ -17,10 +17,9 @@ import pandas_datareader as pdr
 my_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/E2E-DRO"
 import sys
 sys.path.append(my_path)
-from e2edro import E2EDRO as dro
+from e2edro import e2edro as dro
 from e2edro import LossFunctions as lf
 from e2edro import RiskFunctions as rf
-from e2edro.portfolio import portfolio
 
 # Imoprt 'reload' to update E2E_DRO libraries while in development
 from importlib import reload 
@@ -67,30 +66,32 @@ lt_df = pdr.get_data_famafrench('F-F_LT_Reversal_Factor_daily')[0]
 factor_df = pd.concat([factor_df, mom_df, st_df, lt_df], axis=1)
 
 # Convert pd.dataframes to torch.variables and trim the dataset
-X_full = Variable(torch.tensor(factor_df.values / 100, dtype=torch.double))[0:300,:]
-Y_full = Variable(torch.tensor(asset_df.values / 100, dtype=torch.double))[0:300,0:10]
-T = round(X_full.shape[0] * 0.7)
-X, Y = X_full[0:T], Y_full[0:T]
-X_test, Y_test = X_full[T+25:], Y_full[T+25:]
-m, n = X.shape[1], Y.shape[1]
+X = Variable(torch.tensor(factor_df.values / 100, dtype=torch.double))[0:400,:]
+Y = Variable(torch.tensor(asset_df.values / 100, dtype=torch.double))[0:400,0:10]
+
+# Partition dataset into training and testing sets
+X_train, X_test = X[:200], X[200:]
+Y_train, Y_test = Y[:200], Y[200:]
+
+# Declare number of features n_x, number of assets n_y and number of observations n_obs
+# n_obs is the number of observations given to the NN for distributional analysis
+n_x, n_y, n_obs = X.shape[1], Y.shape[1], 100
 
 ####################################################################################################
 # Train neural net
 ####################################################################################################
-reload(dro)
 
-# Initialize the neural net
-e2enet = dro.e2edro(n_x=m, n_y=n, n_obs=T, prisk=rf.p_var, dro_layer=dro.hellinger).double()
+# Neural net object
+e2enet = dro.e2edro(n_x, n_y, n_obs, prisk=rf.p_var, dro_layer=dro.tv).double()
 
-# Train NN
-e2enet.net_train(X=X, Y=Y, Y_train=Y_full, epochs=5, perf_loss=lf.single_period_over_var_loss)
+# Train neural net
+e2enet.net_train(X_train, Y_train, epochs=3, perf_loss=lf.single_period_over_var_loss)
 
+# Print parameter values and gradients
 for name, param in e2enet.named_parameters():
     print(name, param.grad.data)
-
-for name, param in e2enet.named_parameters():
     print(name, param.data)
-
+    
 # Save/load trained model
 model_path = my_path+"/saved_models/test_model"
 torch.save(e2enet, model_path)
@@ -99,4 +100,5 @@ test = torch.load(model_path)
 ####################################################################################################
 # Test neural net
 ####################################################################################################
-p_opt = e2enet.net_test(n_obs=T, X_test=X_test, Y_test=Y_test)
+p_opt = e2enet.net_test(X_test, Y_test)
+
