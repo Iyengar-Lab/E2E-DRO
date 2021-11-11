@@ -17,7 +17,28 @@ import numpy as np
 # SlidingWindow torch Dataset to index data to use a sliding window
 ####################################################################################################
 class SlidingWindow(Dataset):
+    """Sliding window dataset constructor
+    """
     def __init__(self, X, Y, n_obs, perf_period):
+        """Construct a sliding (i.e., rolling) window dataset from a complete timeseries dataset
+
+        Inputs
+        X: Complete feature dataset
+        Y: Complete realizations dataset
+        n_obs: Number of scenarios in the window
+        perf_period: Number of scenarios in the 'performance window' used to evaluate out-of-sample
+        performance. The 'performance window' is also a sliding window
+
+        Output
+        Dataset where each element is the tuple (x, y, y_perf)
+        x: Feature window (dim: [n_obs+1] x n_x)
+        y: Realizations window (dim: n_obs x n_y)
+        y_perf: Window of forward-looking (i.e., future) realizations (dim: perf_period x n_y)
+
+        Note: For each feature window 'x', the last scenario x_t is reserved for prediction and
+        optimization. Therefore, no pair in 'y' is required (it is assumed the pair y_T is not yet
+        observable)
+        """
         self.X = X
         self.Y = Y
         self.window = n_obs+1
@@ -36,9 +57,26 @@ class SlidingWindow(Dataset):
 # Portfolio-object to store out-of-sample results
 ####################################################################################################
 class portfolio:
-    def __init__(self, n_obs, n_y):
-        self.weights = np.zeros((n_obs, n_y))
-        self.rets = np.zeros(n_obs)
+    """Portfolio object
+    """
+    def __init__(self, len_test, n_y):
+        """Portfolio object. Stores the NN out-of-sample results
+
+        Inputs
+        len_test: Number of scenarios in the out-of-sample evaluation period
+        n_y: Number of assets in the portfolio
+
+        Output
+        Portfolio object with fields:
+        weights: Asset weights per period (dim: len_test x n_y)
+        rets: Realized portfolio returns (dim: len_test x 1)
+        tri: Total return index (i.e., absolute cumulative return) (dim: len_test x 1)
+        mean: Average return over the out-of-sample evaluation period (dim: scalar)
+        vol: Volatility (i.e., standard deviation of the returns) (dim: scalar)
+        sharpe: pseudo-Sharpe ratio defined as 'mean / vol' (dim: scalar)
+        """
+        self.weights = np.zeros((len_test, n_y))
+        self.rets = np.zeros(len_test)
 
     def stats(self):
         self.tri = np.cumprod(self.rets + 1)
@@ -109,7 +147,8 @@ class e2e(nn.Module):
     def __init__(self, n_x, n_y, n_obs, prisk):
         """End-to-end learning neural net module
 
-        This NN module implements a linear prediction layer 'pred_layer' and a convex optimization layer 'opt_layer'. 'gamma' is declared as a nn.Parameter so that it can be 'learned'.
+        This NN module implements a linear prediction layer 'pred_layer' and a convex optimization
+        layer 'opt_layer'. 'gamma' is declared as a nn.Parameter so that it can be 'learned'.
 
         Inputs
         n_x: number of inputs (i.e., features) in the prediction model

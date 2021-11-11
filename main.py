@@ -133,5 +133,3 @@ for name, param in dro_net.named_parameters():
 model_path = my_path+"/saved_models/dro_net"
 torch.save(dro_net, model_path)
 test = torch.load(model_path)
-
-dro.e2edro()

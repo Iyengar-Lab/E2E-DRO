@@ -186,7 +186,8 @@ def hellinger(n_y, n_obs, prisk):
     Constraints
     Total budget is equal to 100%, sum(z) == 1
     Long-only positions (no short sales), z >= 0 (specified during the cp.Variable() call)
-    All other constraints allow for a tractable DR counterpart. See the Appendix in Ben-Tal et al. (2013).
+    All other constraints allow for a tractable DR counterpart. See the Appendix in Ben-Tal et al.
+    (2013).
 
     Objective
     Minimize eta_aux + delta * lambda_aux + (1/n_obs) * sum(obj_aux) - gamma * y_hat @ z
