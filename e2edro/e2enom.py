@@ -10,79 +10,15 @@ import cvxpy as cp
 from cvxpylayers.torch import CvxpyLayer
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-import numpy as np
+from torch.utils.data import DataLoader
+import pandas as pd
 
-####################################################################################################
-# SlidingWindow torch Dataset to index data to use a sliding window
-####################################################################################################
-class SlidingWindow(Dataset):
-    """Sliding window dataset constructor
-    """
-    def __init__(self, X, Y, n_obs, perf_period):
-        """Construct a sliding (i.e., rolling) window dataset from a complete timeseries dataset
+import e2edro.PortfolioClasses as pc
 
-        Inputs
-        X: Complete feature dataset
-        Y: Complete realizations dataset
-        n_obs: Number of scenarios in the window
-        perf_period: Number of scenarios in the 'performance window' used to evaluate out-of-sample
-        performance. The 'performance window' is also a sliding window
+from importlib import reload 
+reload(pc)
 
-        Output
-        Dataset where each element is the tuple (x, y, y_perf)
-        x: Feature window (dim: [n_obs+1] x n_x)
-        y: Realizations window (dim: n_obs x n_y)
-        y_perf: Window of forward-looking (i.e., future) realizations (dim: perf_period x n_y)
-
-        Note: For each feature window 'x', the last scenario x_t is reserved for prediction and
-        optimization. Therefore, no pair in 'y' is required (it is assumed the pair y_T is not yet
-        observable)
-        """
-        self.X = X
-        self.Y = Y
-        self.window = n_obs+1
-        self.perf_period = perf_period
-
-    def __getitem__(self, index):
-        x = self.X[index:index+self.window]
-        y = self.Y[index:index+self.window-1]
-        y_perf = self.Y[index+self.window-1:index+self.window+self.perf_period]
-        return (x, y, y_perf)
-
-    def __len__(self):
-        return len(self.X) - self.window - self.perf_period
-
-####################################################################################################
-# Portfolio-object to store out-of-sample results
-####################################################################################################
-class portfolio:
-    """Portfolio object
-    """
-    def __init__(self, len_test, n_y):
-        """Portfolio object. Stores the NN out-of-sample results
-
-        Inputs
-        len_test: Number of scenarios in the out-of-sample evaluation period
-        n_y: Number of assets in the portfolio
-
-        Output
-        Portfolio object with fields:
-        weights: Asset weights per period (dim: len_test x n_y)
-        rets: Realized portfolio returns (dim: len_test x 1)
-        tri: Total return index (i.e., absolute cumulative return) (dim: len_test x 1)
-        mean: Average return over the out-of-sample evaluation period (dim: scalar)
-        vol: Volatility (i.e., standard deviation of the returns) (dim: scalar)
-        sharpe: pseudo-Sharpe ratio defined as 'mean / vol' (dim: scalar)
-        """
-        self.weights = np.zeros((len_test, n_y))
-        self.rets = np.zeros(len_test)
-
-    def stats(self):
-        self.tri = np.cumprod(self.rets + 1)
-        self.mean = (self.tri[-1])**(1/len(self.tri)) - 1
-        self.vol = np.std(self.rets)
-        self.sharpe = self.mean / self.vol
+model_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/E2E-DRO/saved_models/nom_net"
 
 ####################################################################################################
 # opt_layer: CvxpyLayer that declares the portfolio optimization problem
@@ -131,7 +67,7 @@ def opt_layer(n_y, n_obs, prisk):
         constraints += [obj_aux[i] >= prisk(z, c_aux, ep[i])]
 
     # Objective function
-    objective = cp.Minimize((1/n_obs) * cp.sum(obj_aux) - gamma * mu_aux)
+    objective = cp.Minimize((15/n_obs) * cp.sum(obj_aux) - gamma * mu_aux)
 
     # Construct optimization problem and differentiable layer
     problem = cp.Problem(objective, constraints)
@@ -166,7 +102,7 @@ class e2e(nn.Module):
         self.n_obs = n_obs
         
         # Register 'gamma' (risk-return trade-off parameter) to make it differentiable
-        self.gamma = nn.Parameter(torch.rand(1)/5)
+        self.gamma = nn.Parameter(torch.rand(1)*2+0.25)
 
         # LAYER: Linear prediction
         self.pred_layer = nn.Linear(n_x, n_y)
@@ -201,7 +137,7 @@ class e2e(nn.Module):
         # Optimization solver arguments (from CVXPY for SCS solver)
         solver_args = {'eps': 1e-10, 'acceleration_lookback': 0, 'max_iters':15000}
 
-        # Optimize z_t per scenario, aggregate solutions into Z_star
+        # Optimize z per scenario
         z_star, = self.opt_layer(ep, y_hat, self.gamma, solver_args=solver_args)
 
         return z_star, y_hat
@@ -209,7 +145,8 @@ class e2e(nn.Module):
     #-----------------------------------------------------------------------------------------------
     # net_train: Train the e2e neural net
     #-----------------------------------------------------------------------------------------------
-    def net_train(self, X, Y, epochs, perf_loss, pred_loss=torch.nn.MSELoss(), perf_period=22):
+    def net_train(self, X, Y, X_val, Y_val, epochs, lr, perf_loss, pred_loss_factor=0.5,
+                perf_period=6):
         """Neural net training module
 
         Inputs
@@ -217,40 +154,85 @@ class e2e(nn.Module):
         Y: Realizations. (T x n_y) tensor of realizations
         epochs: number of training passes
         perf_loss: Performance loss function based on out-of-sample financial performance
-        pred_loss: Prediction loss function from fit between predictions Y_hat and realizations Y
+        pred_loss_factor: Trade-off between prediction loss function and performance loss function.
+        Set 'pred_loss_factor=None' to define the loss function purely as 'perf_loss'
         perf_period: Number of lookahead realizations used in 'perf_loss()'
 
         Output
-        Trained neural net 'self'
+        results.df: results dataframe with running loss and gamma values (dim: epochs x 2)
         """
-        train_loader = DataLoader(SlidingWindow(X, Y, self.n_obs, perf_period))
+        # Declare InSample object to hold the training results
+        results = pc.InSample()
+
+        # Prepare the data for training as a SlidingWindow dataset
+        train_loader = DataLoader(pc.SlidingWindow(X, Y, self.n_obs, perf_period))
+        n_train = len(train_loader)
+
+        # Prepare the data for testing as a SlidingWindow dataset
+        val_loader = DataLoader(pc.SlidingWindow(X_val, Y_val, self.n_obs, perf_period))
+        n_val = len(val_loader)
+
+        # Prediction loss function
+        pred_loss = torch.nn.MSELoss()
 
         # Define the optimizer and its parameters
-        # optimizer = torch.optim.SGD(self.parameters(), lr=0.05, momentum=0.9)
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.05)
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+
+        # Initialize value for the "best running model"
+        best_tot_val_loss = float("inf")
 
         # Train the neural network
         for epoch in range(epochs):
+
+            # Single training pass: forward + backward
+            tot_loss = 0
             optimizer.zero_grad() 
-            for n, (x, y, y_perf) in enumerate(train_loader):
+            for t, (x, y, y_perf) in enumerate(train_loader):
                 z_star, y_hat = self(x.squeeze(), y.squeeze())
-                if pred_loss is None:
-                    loss = perf_loss(z_star, y_perf.squeeze())
+                if pred_loss_factor is None:
+                    loss = (1/n_train) * perf_loss(z_star, y_perf.squeeze())
                 else:
-                    loss = (perf_loss(z_star, y_perf.squeeze()) + 
-                            pred_loss(y_hat, y_perf.squeeze()[0]))
+                    loss = (1/n_train) * (perf_loss(z_star, y_perf.squeeze()) + 
+                           pred_loss_factor * pred_loss(y_hat, y_perf.squeeze()[0]))
                 loss.backward()
+                tot_loss += loss.item()
             optimizer.step()
+            results.loss.append(tot_loss)
 
             # Ensure that gamma > 0 during backpropagation. Print their values to observe
             # their evolution
             for name, param in self.named_parameters():
                 if name=='gamma':
-                    print(name, param.data)
+                    results.gamma.append(param.data.numpy()[0])
                     param.data.clamp_(0.0001)
+            
+            # Calculate the validation loss of the current model
+            tot_val_loss = 0
+            with torch.no_grad():
+                for t, (x, y, y_perf) in enumerate(val_loader):
+                    # Predict and optimize
+                    z_val, y_val = self(x.squeeze(), y.squeeze())
+                    if pred_loss_factor is None:
+                        val_loss = (1/n_val) * perf_loss(z_val, y_perf.squeeze())
+                    else:
+                        val_loss = (1/n_val) * (perf_loss(z_val, y_perf.squeeze()) + 
+                            pred_loss_factor * pred_loss(y_val, y_perf.squeeze()[0]))
+                    tot_val_loss += val_loss.item()
+            results.val_loss.append(tot_val_loss)
+            
+            # Save best running model
+            if tot_val_loss < best_tot_val_loss:
+                best_tot_val_loss = tot_val_loss
+                torch.save(self.state_dict(), model_path)
+                print("New best found and saved.")
 
-            # Print loss after every iteration
-            print(loss.data.numpy())
+            # Print running results
+            print("Epoch: %d/%d,  " %(epoch+1,epochs),  
+                "TrainLoss: %.3f,  " %tot_loss, 
+                "ValLoss: %.3f,  " %tot_val_loss,
+                "gamma: %.3f" %results.gamma[epoch])
+
+        return results.df()
 
     #-----------------------------------------------------------------------------------------------
     # net_test: Test the e2e neural net
@@ -267,13 +249,13 @@ class e2e(nn.Module):
         Y: Realizations. ([n_obs+n_test] x n_y) matrix of realizations
 
         Output
-        p_opt: object containing running portfolio weights, returns, and cumulative returns
+        portfolio: object containing running portfolio weights, returns, and cumulative returns
         """
         # Prepare the data for testing as a SlidingWindow dataset
-        test_loader = DataLoader(SlidingWindow(X, Y, self.n_obs, 0))
+        test_loader = DataLoader(pc.SlidingWindow(X, Y, self.n_obs, 0))
 
         # Declare portfolio object to hold the test results
-        p_opt = portfolio(len(test_loader), self.n_y)
+        portfolio = pc.backtest(len(test_loader), self.n_y)
 
         with torch.no_grad():
             for t, (x, y, y_perf) in enumerate(test_loader):
@@ -281,10 +263,10 @@ class e2e(nn.Module):
                 z_star, y_hat = self(x.squeeze(), y.squeeze())
 
                 # Store portfolio weights and returns for each time step 't'
-                p_opt.weights[t] = z_star.squeeze()
-                p_opt.rets[t] = y_perf.squeeze() @ p_opt.weights[t]
+                portfolio.weights[t] = z_star.squeeze()
+                portfolio.rets[t] = y_perf.squeeze() @ portfolio.weights[t]
 
         # Calculate the portfolio statistics using the realized portfolio returns
-        p_opt.stats()
+        portfolio.stats()
 
-        return p_opt
+        return portfolio

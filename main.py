@@ -27,6 +27,9 @@ from importlib import reload
 reload(dro)
 reload(nom)
 
+import matplotlib.pyplot as plt
+plt.close("all")
+
 ####################################################################################################
 # Load data
 ####################################################################################################
@@ -60,7 +63,7 @@ X, Y = X[0:T], Y[0:T]
 #---------------------------------------------------------------------------------------------------
 # Data frequency: type '_daily' for daily frequency, or '' for monthly frequency
 freq = ''
-start = '1990-01-01'
+start = '1980-01-01'
 end = '2021-09-30'
 
 # Download data 
@@ -80,49 +83,47 @@ X = Variable(torch.tensor(factor_df.values / 100, dtype=torch.double))[0:400,:]
 Y = Variable(torch.tensor(asset_df.values / 100, dtype=torch.double))[0:400,0:10]
 
 # Partition dataset into training and testing sets
-X_train, X_test = X[:200], X[200:]
-Y_train, Y_test = Y[:200], Y[200:]
+X_train, X_val, X_test = X[:150], X[150:250], X[250:]
+Y_train, Y_val, Y_test = Y[:150], Y[150:250], Y[250:]
 
 # Declare number of features n_x, number of assets n_y and number of observations n_obs
 # n_obs is the number of observations given to the NN for distributional analysis
-n_x, n_y, n_obs = X.shape[1], Y.shape[1], 100
+n_x, n_y, n_obs = X.shape[1], Y.shape[1], 80
 
 ####################################################################################################
 # Neural net training and testing
 ####################################################################################################
+# Evaluation metrics
+perf_loss=lf.single_period_over_var_loss
+pred_loss_factor = 0.1
+epochs = 3
+lr = 0.025
+
 #---------------------------------------------------------------------------------------------------
 # E2E Nominal neural net
 #---------------------------------------------------------------------------------------------------
 # Neural net object
-nom_net = nom.e2e(n_x, n_y, n_obs, prisk=rf.p_var).double()
+nom_net = dro.e2e(n_x, n_y, n_obs, prisk=rf.p_var).double()
 
-# Train neural net
-nom_net.net_train(X_train, Y_train, epochs=50, perf_loss=lf.single_period_over_var_loss)
+# Train and validate neural net
+nom_results = nom_net.net_train(X_train, Y_train, X_val, Y_val, epochs=epochs, lr = lr, 
+                perf_loss=perf_loss, pred_loss_factor=pred_loss_factor)
 
-# Test neural net
-p_nom = nom_net.net_test(X_test, Y_test)
-
-# Print parameter values and gradients
-for name, param in nom_net.named_parameters():
-    print(name, param.grad.data)
-    print(name, param.data)
-    
-# Save/load trained model
-model_path = my_path+"/saved_models/nom_net"
-torch.save(nom_net, model_path)
-test = torch.load(model_path)
+# Ouf-of-sample test
+nom_p = nom_net.net_test(X_test, Y_test)
 
 #---------------------------------------------------------------------------------------------------
 # E2E DRO neural net
 #---------------------------------------------------------------------------------------------------
 # Neural net object
-dro_net = dro.e2edro(n_x, n_y, n_obs, prisk=rf.p_var, dro_layer=dro.tv).double()
+dro_net = dro.e2e(n_x, n_y, n_obs, prisk=rf.p_var, opt_layer='hellinger').double()
 
-# Train neural net
-dro_net.net_train(X_train, Y_train, epochs=50, perf_loss=lf.single_period_over_var_loss)
+# Train and validate neural net
+dro_results = dro_net.net_train(X_train, Y_train, X_val, Y_val, epochs=epochs, lr = lr,
+                perf_loss=perf_loss, pred_loss_factor=pred_loss_factor)
 
-# Test neural net
-p_dro = dro_net.net_test(X_test, Y_test)
+# Ouf-of-sample test
+dro_p = dro_net.net_test(X_test, Y_test)
 
 # Print parameter values and gradients
 for name, param in dro_net.named_parameters():
@@ -133,3 +134,11 @@ for name, param in dro_net.named_parameters():
 model_path = my_path+"/saved_models/dro_net"
 torch.save(dro_net, model_path)
 test = torch.load(model_path)
+
+
+
+
+nom_results.plot()
+
+
+plt.show()
