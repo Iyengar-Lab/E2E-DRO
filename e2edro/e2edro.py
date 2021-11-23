@@ -1,7 +1,6 @@
 # E2E DRO Module
 #
 # Prepared by: Giorgio Costa (gc2958@columbia.edu)
-# Last revision: 08-Nov-2021
 #
 ####################################################################################################
 ## Import libraries
@@ -11,20 +10,22 @@ from cvxpylayers.torch import CvxpyLayer
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-import pandas as pd
+from torch.autograd import Variable
 
+import e2edro.RiskFunctions as rf
+import e2edro.LossFunctions as lf
 import e2edro.PortfolioClasses as pc
 
 from importlib import reload 
 reload(pc)
 
-model_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/E2E-DRO/saved_models/"
+model_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/saved_models/"
 
 ####################################################################################################
 # CvxpyLayers: Differentiable optimization layers (nominal and distributionally robust)
 ####################################################################################################
 #---------------------------------------------------------------------------------------------------
-# nom: CvxpyLayer that declares the portfolio optimization problem
+# nominal: CvxpyLayer that declares the portfolio optimization problem
 #---------------------------------------------------------------------------------------------------
 def nominal(n_y, n_obs, prisk):
     """Nominal optimization problem declared as a CvxpyLayer object
@@ -38,6 +39,7 @@ def nominal(n_y, n_obs, prisk):
     z: Decision variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
     c_aux: Auxiliary Variable. Scalar
     obj_aux: Auxiliary Variable. (n_obs x 1) vector. Allows for a tractable DR counterpart.
+    mu_aux: Auxiliary Variable. Scalar. Represents the portfolio conditional expected return.
 
     Parameters
     ep: (n_obs x n_y) matrix of residuals 
@@ -103,6 +105,7 @@ def tv(n_y, n_obs, prisk):
     returns)
     delta: Scalar. Maximum distance between p and q.
     gamma: Scalar. Trade-off between conditional expected return and model error.
+    mu_aux: Auxiliary Variable. Scalar. Represents the portfolio conditional expected return.
 
     Constraints
     Total budget is equal to 100%, sum(z) == 1
@@ -224,7 +227,7 @@ def hellinger(n_y, n_obs, prisk):
 class e2e(nn.Module):
     """End-to-end DRO learning neural net module.
     """
-    def __init__(self, n_x, n_y, n_obs, prisk, opt_layer='nominal'):
+    def __init__(self, n_x, n_y, n_obs, prisk='p_var', opt_layer='nominal'):
         """End-to-end learning neural net module
 
         This NN module implements a linear prediction layer 'pred_layer' and a DRO layer 
@@ -246,24 +249,24 @@ class e2e(nn.Module):
         self.n_x = n_x
         self.n_y = n_y
         self.n_obs = n_obs
-        
-        # Register 'delta' (ambiguity sizing parameter) to make it differentiable
-        self.delta = nn.Parameter(torch.rand(1)/5)
 
-        # Register 'gamma' (risk-return trade-off parameter) to make it differentiable
+        # Register 'gamma' (risk-return trade-off parameter)
         self.gamma = nn.Parameter(torch.rand(1)*2+0.25)
 
         # LAYER: Linear prediction
         self.pred_layer = nn.Linear(n_x, n_y)
 
         # LAYER: Optimization
-        self.opt_layer = eval(opt_layer)(n_y, n_obs, prisk)
+        self.opt_layer = eval(opt_layer)(n_y, n_obs, eval('rf.'+prisk))
 
         # Record the model design: nominal or DRO
         if opt_layer == 'nominal':
             self.nominal = True 
         else:
             self.nominal = False
+
+            # Register 'delta' (ambiguity sizing parameter) for DRO model
+            self.delta = nn.Parameter(torch.rand(1)/5)
         
     #-----------------------------------------------------------------------------------------------
     # forward: forward pass of the e2e neural net
@@ -307,17 +310,19 @@ class e2e(nn.Module):
     #-----------------------------------------------------------------------------------------------
     # net_train: Train the e2e neural net
     #-----------------------------------------------------------------------------------------------
-    def net_train(self, X, Y, X_val, Y_val, epochs, lr, perf_loss, pred_loss_factor=0.5,
-                    perf_period=6):
+    def net_train(self, X, Y, X_val, Y_val, epochs, lr, perf_loss='single_period_over_var_loss',
+                pred_loss_factor=0.5, perf_period=6):
         """Neural net training module
 
         Inputs
         X: Features. (T x n_x) tensor of timeseries data
         Y: Realizations. (T x n_y) tensor of realizations
+        X_val: Features. (T_val x n_x) tensor of timeseries data for model validation
+        Y_val: Realizations. (T_val x n_y) tensor of realizations for model validation
         epochs: number of training passes
         perf_loss: Performance loss function based on out-of-sample financial performance
         pred_loss_factor: Trade-off between prediction loss function and performance loss function.
-        Set 'pred_loss_factor=None' to define the loss function purely as 'perf_loss'
+            Set 'pred_loss_factor=None' to define the loss function purely as 'perf_loss'
         perf_period: Number of lookahead realizations used in 'perf_loss()'
 
         Output
@@ -325,6 +330,12 @@ class e2e(nn.Module):
         """
         # Declare InSample object to hold the training results
         results = pc.InSample()
+
+        # Convert pd.dataframes to torch.variables and trim the dataset
+        X, X_val = Variable(torch.tensor(X.values, dtype=torch.double)), Variable(
+                    torch.tensor(X_val.values, dtype=torch.double))
+        Y, Y_val = Variable(torch.tensor(Y.values, dtype=torch.double)), Variable(
+                    torch.tensor(Y_val.values, dtype=torch.double))
 
         # Prepare the data for training as a SlidingWindow dataset
         train_loader = DataLoader(pc.SlidingWindow(X, Y, self.n_obs, perf_period))
@@ -343,11 +354,13 @@ class e2e(nn.Module):
         # Initialize value for the "best running model"
         best_tot_val_loss = float("inf")
 
+        perf_loss = eval('lf.'+perf_loss)
+
         # Train the neural network
         if self.nominal:
-            print("========= Training E2E nominal model =========")
+            print("============== Training E2E nominal model ==============")
         else:
-            print("========= Training E2E DRO model =========")
+            print("============== Training E2E DRO model ==============")
 
         for epoch in range(epochs):
             
@@ -399,10 +412,10 @@ class e2e(nn.Module):
             if tot_val_loss < best_tot_val_loss:
                 best_tot_val_loss = tot_val_loss
                 if self.nominal:
-                    torch.save(self.state_dict(), model_path+"nom_net")
+                    torch.save(self.state_dict(), model_path+'nom_net_best')
                 else:
-                    torch.save(self.state_dict(), model_path+"dro_net")
-                print("New best model saved")
+                    torch.save(self.state_dict(), model_path+'dro_net_best')
+                print("Model saved")
 
             # PRINT RESULTS
             if self.nominal:
@@ -416,6 +429,12 @@ class e2e(nn.Module):
                     "ValLoss: %.3f, " %tot_val_loss,
                     "gamma: %.3f, " %results.gamma[epoch],
                     "delta: %.3f" %results.delta[epoch])
+
+        if self.nominal:
+            torch.save(self.state_dict(), model_path+'nom_net')
+        else:
+            torch.save(self.state_dict(), model_path+'dro_net')
+        print("Final model saved")
 
         return results.df()
 
@@ -436,16 +455,22 @@ class e2e(nn.Module):
         Output
         portfolio: object containing running portfolio weights, returns, and cumulative returns
         """
+        dates = X.index
+
+        # Convert pd.dataframes to torch.variables and trim the dataset
+        X = Variable(torch.tensor(X.values, dtype=torch.double))
+        Y = Variable(torch.tensor(Y.values, dtype=torch.double))
+
         # Prepare the data for testing as a SlidingWindow dataset
         test_loader = DataLoader(pc.SlidingWindow(X, Y, self.n_obs, 0))
 
         # Declare backtest object to hold the test results
-        portfolio = pc.backtest(len(test_loader), self.n_y)
+        portfolio = pc.backtest(len(test_loader), self.n_y, dates)
 
         with torch.no_grad():
             for t, (x, y, y_perf) in enumerate(test_loader):
                 # Predict and optimize
-                z_star, y_hat = self(x.squeeze(), y.squeeze())
+                z_star, _ = self(x.squeeze(), y.squeeze())
 
                 # Store portfolio weights and returns for each time step 't'
                 portfolio.weights[t] = z_star.squeeze()

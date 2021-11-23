@@ -1,7 +1,6 @@
 # Financial performance loss functions for E2E learning framework
 #
 # Prepared by:    Giorgio Costa (gc2958@columbia.edu)
-# Last revision:  08-nov-2021
 #
 ####################################################################################################
 ## Import libraries

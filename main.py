@@ -1,144 +1,147 @@
 # End-to-End Distributionally Robust Optimization
 #
-# Prepared by:    Giorgio Costa (gc2958@columbia.edu)
-# Last revision:  31-Oct-2021
+# Prepared by: Giorgio Costa (gc2958@columbia.edu)
 #
 ####################################################################################################
-## Import libraries
+# %% Import libraries
 ####################################################################################################
 import torch
-import torch.nn as nn
-from torch.autograd import Variable
-import numpy as np
 import pandas as pd
-import pandas_datareader as pdr
+import matplotlib.pyplot as plt
+plt.close("all")
 
 # Import E2E_DRO functions
-my_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/E2E-DRO"
+my_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL"
 import sys
-sys.path.append(my_path)
+sys.path.append(my_path+"/E2E-DRO")
 from e2edro import e2edro as dro
-from e2edro import e2enom as nom
-from e2edro import LossFunctions as lf
-from e2edro import RiskFunctions as rf
+from data import DataLoader as dl
+from other import PlotFunctions as pf
+from other import NaiveModel as nm
 
 # Imoprt 'reload' to update E2E_DRO libraries while in development
 from importlib import reload 
 reload(dro)
-reload(nom)
-
-import matplotlib.pyplot as plt
-plt.close("all")
+reload(dl)
+reload(pf)
 
 ####################################################################################################
-# Load data
+# %% Load data
 ####################################################################################################
-
-#---------------------------------------------------------------------------------------------------
-# Option 1: Generate synthetic data
-#---------------------------------------------------------------------------------------------------
-torch.manual_seed(1)
-# Number of observations T, features m and outputs n
-T, m, n = 112, 8, 15
-
-# 'True' prediction bias and weights
-a = torch.rand(n)
-b = torch.randn(m,n)
-
-# Syntehtic features
-X = torch.randn(T, m)
-
-# Synthetic outputs
-Y_test = a + X @ b + 0.2*torch.randn(T,n)
-
-# Convert them to Variable type for use with torch library
-X, Y = Variable(X), Variable(Y_test)
-
-T = 100
-X, Y = X[0:T], Y[0:T]
-
-#---------------------------------------------------------------------------------------------------
-# Option 2: Load data from Kenneth French's data library 
-# https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html 
-#---------------------------------------------------------------------------------------------------
-# Data frequency: type '_daily' for daily frequency, or '' for monthly frequency
-freq = ''
-start = '1980-01-01'
+# Data frequency and start/end dates
+freq = 'weekly'
+start = '2000-01-01'
 end = '2021-09-30'
 
-# Download data 
-asset_df = pdr.get_data_famafrench('10_Industry_Portfolios'+freq, start=start, end=end)[0]
-factor_df = pdr.get_data_famafrench('F-F_Research_Data_5_Factors_2x3'+freq, start=start, end=end)[0]
-rf_df = factor_df['RF']
-factor_df = factor_df.drop(['RF'], axis=1)
-mom_df = pdr.get_data_famafrench('F-F_Momentum_Factor'+freq, start=start, end=end)[0]
-st_df = pdr.get_data_famafrench('F-F_ST_Reversal_Factor'+freq, start=start, end=end)[0]
-lt_df = pdr.get_data_famafrench('F-F_LT_Reversal_Factor'+freq, start=start, end=end)[0]
+# Train, validation and test split percentage
+split = [0.5, 0.2, 0.3]
 
-# Concatenate factors as a pandas dataframe
-factor_df = pd.concat([factor_df, mom_df, st_df, lt_df], axis=1)
+# Load data
+X, Y = dl.FamaFrench(start, end, split, freq)
 
-# Convert pd.dataframes to torch.variables and trim the dataset
-X = Variable(torch.tensor(factor_df.values / 100, dtype=torch.double))[0:400,:]
-Y = Variable(torch.tensor(asset_df.values / 100, dtype=torch.double))[0:400,0:10]
+# Number of features and assets
+n_x, n_y = X.train.shape[1], Y.train.shape[1]
 
-# Partition dataset into training and testing sets
-X_train, X_val, X_test = X[:150], X[150:250], X[250:]
-Y_train, Y_val, Y_test = Y[:150], Y[150:250], Y[250:]
-
-# Declare number of features n_x, number of assets n_y and number of observations n_obs
-# n_obs is the number of observations given to the NN for distributional analysis
-n_x, n_y, n_obs = X.shape[1], Y.shape[1], 80
+# Number of observations per window 
+n_obs = 104
 
 ####################################################################################################
-# Neural net training and testing
+# %% Neural net training and testing
 ####################################################################################################
 # Evaluation metrics
-perf_loss=lf.single_period_over_var_loss
+perf_loss='single_period_over_var_loss'
 pred_loss_factor = 0.1
-epochs = 3
+epochs = 75
+prisk = 'p_var'
+opt_layer = 'hellinger'
+
+#---------------------------------------------------------------------------------------------------
+# %% E2E Nominal neural net
+#---------------------------------------------------------------------------------------------------
+# Set learning rate
+lr = 0.01
+
+# Neural net object
+nom_net = dro.e2e(n_x, n_y, n_obs, prisk=prisk).double()
+
+# Train and validate neural net
+nom_results = nom_net.net_train(X.train, Y.train, X.val, Y.val, epochs=epochs, lr=lr, 
+                perf_loss=perf_loss, pred_loss_factor=pred_loss_factor)
+
+# Save dataframe with training results
+# nom_results.to_pickle(my_path+"/saved_models/nom_results.pkl")
+nom_results = pd.read_pickle(my_path+"/saved_models/nom_results.pkl")
+
+# Ouf-of-sample test
+# nom_net.load_state_dict(torch.load(my_path+"/saved_models/nom_net"))
+nom_p = nom_net.net_test(X.test, Y.test)
+
+# Ouf-of-sample test of 'best trained' model
+nom_net_best = dro.e2e(n_x, n_y, n_obs).double()
+nom_net_best.load_state_dict(torch.load(my_path+"/saved_models/nom_net_best"))
+nom_p_best = nom_net_best.net_test(X.test, Y.test)
+
+#---------------------------------------------------------------------------------------------------
+# %% E2E DRO neural net
+#---------------------------------------------------------------------------------------------------
+# Set learning rate
 lr = 0.025
 
-#---------------------------------------------------------------------------------------------------
-# E2E Nominal neural net
-#---------------------------------------------------------------------------------------------------
 # Neural net object
-nom_net = dro.e2e(n_x, n_y, n_obs, prisk=rf.p_var).double()
+dro_net = dro.e2e(n_x, n_y, n_obs, prisk=prisk, opt_layer=opt_layer).double()
 
 # Train and validate neural net
-nom_results = nom_net.net_train(X_train, Y_train, X_val, Y_val, epochs=epochs, lr = lr, 
+dro_results = dro_net.net_train(X.train, Y.train, X.val, Y.val, epochs=epochs, lr=lr,
                 perf_loss=perf_loss, pred_loss_factor=pred_loss_factor)
 
-# Ouf-of-sample test
-nom_p = nom_net.net_test(X_test, Y_test)
-
-#---------------------------------------------------------------------------------------------------
-# E2E DRO neural net
-#---------------------------------------------------------------------------------------------------
-# Neural net object
-dro_net = dro.e2e(n_x, n_y, n_obs, prisk=rf.p_var, opt_layer='hellinger').double()
-
-# Train and validate neural net
-dro_results = dro_net.net_train(X_train, Y_train, X_val, Y_val, epochs=epochs, lr = lr,
-                perf_loss=perf_loss, pred_loss_factor=pred_loss_factor)
+# Save dataframe with training results
+# dro_results.to_pickle(my_path+"/saved_models/dro_results.pkl")
+# dro_results = pd.read_pickle(my_path+"/saved_models/dro_results.pkl")
 
 # Ouf-of-sample test
-dro_p = dro_net.net_test(X_test, Y_test)
+# dro_net.load_state_dict(torch.load(my_path+"/saved_models/dro_net"))
+dro_p = dro_net.net_test(X.test, Y.test)
 
-# Print parameter values and gradients
-for name, param in dro_net.named_parameters():
-    print(name, param.grad.data)
-    print(name, param.data)
-    
-# Save/load trained model
-model_path = my_path+"/saved_models/dro_net"
-torch.save(dro_net, model_path)
-test = torch.load(model_path)
+# Ouf-of-sample test of 'best trained' model
+dro_net_best = dro.e2e(n_x, n_y, n_obs, prisk=prisk, opt_layer=opt_layer).double()
+dro_net_best.load_state_dict(torch.load(my_path+"/saved_models/dro_net_best"))
+dro_p_best = dro_net_best.net_test(X.test, Y.test)
+
+#---------------------------------------------------------------------------------------------------
+# %% Naive model
+#---------------------------------------------------------------------------------------------------
+reload(nm)
+
+naive_net = nm.pred_then_opt(n_x, n_y, n_obs, prisk=prisk, gamma=1.5)
+naive_net.train(X.train, Y.train)
+
+naive_p = naive_net.test(X.test, Y.test)
+
+####################################################################################################
+# %% Plots
+####################################################################################################
+
+#---------------------------------------------------------------------------------------------------
+# Loss plots
+#---------------------------------------------------------------------------------------------------
+pf.loss_plot(nom_results, path=my_path+"/plots/loss_nom.pdf")
+pf.loss_plot(dro_results, path=my_path+"/plots/loss_dro.pdf")
+
+#---------------------------------------------------------------------------------------------------
+# Gamma and delta plots
+#---------------------------------------------------------------------------------------------------
+pf.gamma_plot(nom_results, path=my_path+"/plots/gamma_nom.pdf")
+pf.gamma_plot(dro_results, path=my_path+"/plots/gamma_dro.pdf")
+
+#---------------------------------------------------------------------------------------------------
+# Wealth evolution plots
+#---------------------------------------------------------------------------------------------------
+pf.wealth_plot(nom_p_best, dro_p_best, path=my_path+"/plots/wealth.pdf")
 
 
+# %%
 
-
-nom_results.plot()
-
-
-plt.show()
+# Data load module (including transformation to weekly data)
+# Plotting module
+# Tune nominal and DRO models
+# Compare delta and gamma evolution

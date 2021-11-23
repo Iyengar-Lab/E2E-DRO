@@ -1,7 +1,6 @@
-# E2E DRO Module
+# PortfolioClasses Module
 #
 # Prepared by: Giorgio Costa (gc2958@columbia.edu)
-# Last revision: 08-Nov-2021
 #
 ####################################################################################################
 ## Import libraries
@@ -56,12 +55,13 @@ class SlidingWindow(Dataset):
 class backtest:
     """Portfolio object
     """
-    def __init__(self, len_test, n_y):
+    def __init__(self, len_test, n_y, dates):
         """Portfolio object. Stores the NN out-of-sample results
 
         Inputs
         len_test: Number of scenarios in the out-of-sample evaluation period
         n_y: Number of assets in the portfolio
+        dates: DatetimeIndex 
 
         Output
         Backtest object with fields:
@@ -74,12 +74,15 @@ class backtest:
         """
         self.weights = np.zeros((len_test, n_y))
         self.rets = np.zeros(len_test)
+        self.dates = dates[-len_test:]
 
     def stats(self):
-        self.tri = np.cumprod(self.rets + 1)
-        self.mean = (self.tri[-1])**(1/len(self.tri)) - 1
+        tri = np.cumprod(self.rets + 1)
+        self.mean = (tri[-1])**(1/len(tri)) - 1
         self.vol = np.std(self.rets)
         self.sharpe = self.mean / self.vol
+        self.rets = pd.DataFrame({'Date':self.dates, 'rets': self.rets, 'tri': tri})
+        self.rets = self.rets.set_index('Date')
 
 ####################################################################################################
 # Backtest object to store out-of-sample results

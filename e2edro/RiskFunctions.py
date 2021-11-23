@@ -4,7 +4,6 @@
 # problem.
 # 
 # Prepared by:    Giorgio Costa (gc2958@columbia.edu)
-# Last revision:  08-Nov-2021
 #
 ####################################################################################################
 ## Import libraries
