@@ -27,13 +27,14 @@ model_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Docume
 #---------------------------------------------------------------------------------------------------
 # nominal: CvxpyLayer that declares the portfolio optimization problem
 #---------------------------------------------------------------------------------------------------
-def nominal(n_y, n_obs, prisk):
+def nominal(n_y, n_obs, prisk, turnover=False):
     """Nominal optimization problem declared as a CvxpyLayer object
 
     Inputs
     n_y: number of assets
     n_obs: Number of scenarios in the dataset
     prisk: Portfolio risk function
+    turnover: Optional. Determine whether the portfolio turnover rate should be constrained
     
     Variables
     z: Decision variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
@@ -64,25 +65,32 @@ def nominal(n_y, n_obs, prisk):
     ep = cp.Parameter((n_obs, n_y))
     y_hat = cp.Parameter(n_y)
     gamma = cp.Parameter(nonneg=True)
+    if turnover:
+        z_t = cp.Parameter((n_y,1), nonneg=True)
     
     # Constraints
     constraints = [cp.sum(z) == 1,
                 mu_aux == y_hat @ z]
     for i in range(n_obs):
         constraints += [obj_aux[i] >= prisk(z, c_aux, ep[i])]
+    if turnover:
+        constraints += [cp.sum(cp.abs(z - z_t)) <= 1.0]
 
     # Objective function
-    objective = cp.Minimize((15/n_obs) * cp.sum(obj_aux) - gamma * mu_aux)
+    objective = cp.Minimize((1/n_obs) * cp.sum(obj_aux) - gamma * mu_aux)
 
     # Construct optimization problem and differentiable layer
     problem = cp.Problem(objective, constraints)
 
-    return CvxpyLayer(problem, parameters=[ep, y_hat, gamma], variables=[z])
+    if turnover:
+        return CvxpyLayer(problem, parameters=[ep, y_hat, gamma, z_t], variables=[z])
+    else:
+        return CvxpyLayer(problem, parameters=[ep, y_hat, gamma], variables=[z])
 
 #---------------------------------------------------------------------------------------------------
 # Total Variation: sum_t abs(p_t - q_t) <= delta
 #---------------------------------------------------------------------------------------------------
-def tv(n_y, n_obs, prisk):
+def tv(n_y, n_obs, prisk, turnover=False):
     """DRO layer using the 'Total Variation' distance to define the probability ambiguity set.
     From Ben-Tal et al. (2013).
     Total Variation: sum_t abs(p_t - q_t) <= delta
@@ -91,6 +99,7 @@ def tv(n_y, n_obs, prisk):
     n_y: Number of assets
     n_obs: Number of scenarios in the dataset
     prisk: Portfolio risk function
+    turnover: Optional. Determine whether the portfolio turnover rate should be constrained
     
     Variables
     z: Decision variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
@@ -130,6 +139,8 @@ def tv(n_y, n_obs, prisk):
     y_hat = cp.Parameter(n_y)
     gamma = cp.Parameter(nonneg=True)
     delta = cp.Parameter(nonneg=True)
+    if turnover:
+        z_t = cp.Parameter((n_y,1), nonneg=True)
     
     # Constraints
     constraints = [cp.sum(z) == 1,
@@ -138,20 +149,25 @@ def tv(n_y, n_obs, prisk):
     for i in range(n_obs):
         constraints += [obj_aux[i] >= prisk(z, c_aux, ep[i]) - eta_aux]
         constraints += [prisk(z, c_aux, ep[i]) - eta_aux <= lambda_aux]
+    if turnover:
+        constraints += [cp.sum(cp.abs(z - z_t)) <= 1.0]
 
     # Objective function
-    objective = cp.Minimize(15 * (eta_aux + delta*lambda_aux + (1/n_obs)*cp.sum(obj_aux)) 
+    objective = cp.Minimize(eta_aux + delta * lambda_aux + (1/n_obs) * cp.sum(obj_aux)
                             - gamma * mu_aux)
 
     # Construct optimization problem and differentiable layer
     problem = cp.Problem(objective, constraints)
 
-    return CvxpyLayer(problem, parameters=[ep, y_hat, gamma, delta], variables=[z])
+    if turnover:
+        return CvxpyLayer(problem, parameters=[ep, y_hat, gamma, delta, z_t], variables=[z])
+    else: 
+        return CvxpyLayer(problem, parameters=[ep, y_hat, gamma, delta], variables=[z])
 
 #---------------------------------------------------------------------------------------------------
 # Hellinger distance: sum_t (sqrt(p_t) - sqrtq_t))^2 <= delta
 #---------------------------------------------------------------------------------------------------
-def hellinger(n_y, n_obs, prisk):
+def hellinger(n_y, n_obs, prisk, turnover=False):
     """DRO layer using the Hellinger distance to define the probability ambiguity set.
     from Ben-Tal et al. (2013).
     Hellinger distance: sum_t (sqrt(p_t) - sqrtq_t))^2 <= delta
@@ -160,6 +176,7 @@ def hellinger(n_y, n_obs, prisk):
     n_y: number of assets
     n_obs: Number of scenarios in the dataset
     prisk: Portfolio risk function
+    turnover: Optional. Determine whether the portfolio turnover rate should be constrained
     
     Variables
     z: Decision variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
@@ -201,6 +218,8 @@ def hellinger(n_y, n_obs, prisk):
     y_hat = cp.Parameter(n_y)
     gamma = cp.Parameter(nonneg=True)
     delta = cp.Parameter(nonneg=True)
+    if turnover:
+        z_t = cp.Parameter((n_y,1), nonneg=True)
 
     # Constraints
     constraints = [cp.sum(z) == 1,
@@ -211,15 +230,20 @@ def hellinger(n_y, n_obs, prisk):
         constraints += [0.5 * (obj_aux[i] + lambda_aux - prisk(z,c_aux,ep[i]) + eta_aux) >=
                         cp.norm(cp.vstack([lambda_aux, const_aux[i]]))]
         constraints += [prisk(z, c_aux, ep[i]) - eta_aux <= lambda_aux]
+    if turnover:
+        constraints += [cp.sum(cp.abs(z - z_t)) <= 1.0]
 
     # Objective function
-    objective = cp.Minimize(15 * (eta_aux + lambda_aux*(delta-1) + (1/n_obs)*cp.sum(obj_aux)) 
+    objective = cp.Minimize(eta_aux + lambda_aux * (delta-1) + (1/n_obs) * cp.sum(obj_aux) 
                             - gamma * mu_aux)
 
     # Construct optimization problem and differentiable layer
     problem = cp.Problem(objective, constraints)
-
-    return CvxpyLayer(problem, parameters=[ep, y_hat, gamma, delta], variables=[z])
+    
+    if turnover:
+        return CvxpyLayer(problem, parameters=[ep, y_hat, gamma, delta, z_t], variables=[z])
+    else:
+        return CvxpyLayer(problem, parameters=[ep, y_hat, gamma, delta], variables=[z])
 
 ####################################################################################################
 # DRO neural network module
@@ -227,7 +251,8 @@ def hellinger(n_y, n_obs, prisk):
 class e2e(nn.Module):
     """End-to-end DRO learning neural net module.
     """
-    def __init__(self, n_x, n_y, n_obs, prisk='p_var', opt_layer='nominal'):
+    def __init__(self, n_x, n_y, n_obs, prisk='p_var', opt_layer='nominal', turnover=False, 
+                iter_id=None):
         """End-to-end learning neural net module
 
         This NN module implements a linear prediction layer 'pred_layer' and a DRO layer 
@@ -246,18 +271,24 @@ class e2e(nn.Module):
         """
         super(e2e, self).__init__()
 
+        if iter_id is not None:
+            torch.manual_seed(iter_id+100)
+
         self.n_x = n_x
         self.n_y = n_y
         self.n_obs = n_obs
 
         # Register 'gamma' (risk-return trade-off parameter)
-        self.gamma = nn.Parameter(torch.rand(1)*2+0.25)
+        self.gamma = nn.Parameter(torch.rand(1)/20 + 0.005)
 
         # LAYER: Linear prediction
         self.pred_layer = nn.Linear(n_x, n_y)
 
         # LAYER: Optimization
-        self.opt_layer = eval(opt_layer)(n_y, n_obs, eval('rf.'+prisk))
+        self.opt_layer = eval(opt_layer)(n_y, n_obs, eval('rf.'+prisk), turnover)
+        
+        # Record the model design: with or without turnover rate constraints
+        self.turnover = turnover
 
         # Record the model design: nominal or DRO
         if opt_layer == 'nominal':
@@ -266,12 +297,12 @@ class e2e(nn.Module):
             self.nominal = False
 
             # Register 'delta' (ambiguity sizing parameter) for DRO model
-            self.delta = nn.Parameter(torch.rand(1)/5)
+            self.delta = nn.Parameter(torch.rand(1)/15 + 0.025)
         
     #-----------------------------------------------------------------------------------------------
     # forward: forward pass of the e2e neural net
     #-----------------------------------------------------------------------------------------------
-    def forward(self, X, Y):
+    def forward(self, X, Y, z_t=None):
         """Forward pass of the NN module
 
         The inputs 'X' are passed through the prediction layer to yield predictions 'Y_hat'. The
@@ -279,15 +310,15 @@ class e2e(nn.Module):
         are passed to the optimization layer to find the optimal decision z_star.
 
         Inputs
-        X: Features. ([n_obs+1] x n_x) matrix of timeseries data
-        Y: Realizations. (n_obs x n_y) matrix of realizations
+        X: Features. ([n_obs+1] x n_x) torch tensor with feature timeseries data
+        Y: Realizations. (n_obs x n_y) torch tensor with asset timeseries data
 
         Other 
         ep: Residuals. (n_obs x n_y) matrix of the residual between realizations and predictions
 
         Outputs
         y_hat: Prediction. (n_y x 1) vector of outputs of the prediction layer
-        z_t: Optimal solution. (n_y x 1) vector of asset weights
+        z_star: Optimal solution. (n_y x 1) vector of asset weights
         """
         # Predict y_hat from x
         Y_hat = torch.stack([self.pred_layer(x_t) for x_t in X])
@@ -297,28 +328,35 @@ class e2e(nn.Module):
         y_hat = Y_hat[-1]
 
         # Optimization solver arguments (from CVXPY for SCS solver)
-        solver_args = {'eps': 1e-10, 'acceleration_lookback': 0, 'max_iters':25000}
+        solver_args = {'eps': 1e-12, 'acceleration_lookback': 0, 'max_iters':25000}
 
         # Optimize z per scenario
-        if self.nominal:
-            z_star, = self.opt_layer(ep, y_hat, self.gamma, solver_args=solver_args)
-        else:
-            z_star, = self.opt_layer(ep, y_hat, self.gamma, self.delta, solver_args=solver_args)
+        # Determine whether nominal or dro model, and whether turnover is constrained or not
+        if self.turnover:
+            if self.nominal:
+                z_star, = self.opt_layer(ep, y_hat, self.gamma, z_t, solver_args=solver_args)
+            else:
+                z_star, = self.opt_layer(ep, y_hat, self.gamma, self.delta, z_t,
+                            solver_args=solver_args)
+        else: 
+            if self.nominal:
+                z_star, = self.opt_layer(ep, y_hat, self.gamma, solver_args=solver_args)
+            else:
+                z_star, = self.opt_layer(ep, y_hat, self.gamma, self.delta,
+                            solver_args=solver_args)
 
         return z_star, y_hat
 
     #-----------------------------------------------------------------------------------------------
     # net_train: Train the e2e neural net
     #-----------------------------------------------------------------------------------------------
-    def net_train(self, X, Y, X_val, Y_val, epochs, lr, perf_loss='single_period_over_var_loss',
-                pred_loss_factor=0.5, perf_period=6):
+    def net_train(self, X, Y, epochs=50, lr=0.025, perf_loss='sharpe_loss', pred_loss_factor=0.5, 
+                    perf_period=12, pre_params=None, iter_id=''):
         """Neural net training module
 
         Inputs
-        X: Features. (T x n_x) tensor of timeseries data
-        Y: Realizations. (T x n_y) tensor of realizations
-        X_val: Features. (T_val x n_x) tensor of timeseries data for model validation
-        Y_val: Realizations. (T_val x n_y) tensor of realizations for model validation
+        X: Features. TrainValTest object of feature timeseries data
+        Y: Realizations. TrainValTest object of asset time series data
         epochs: number of training passes
         perf_loss: Performance loss function based on out-of-sample financial performance
         pred_loss_factor: Trade-off between prediction loss function and performance loss function.
@@ -328,33 +366,42 @@ class e2e(nn.Module):
         Output
         results.df: results dataframe with running loss, gamma and delta values (dim: epochs x 3)
         """
-        # Declare InSample object to hold the training results
-        results = pc.InSample()
 
-        # Convert pd.dataframes to torch.variables and trim the dataset
-        X, X_val = Variable(torch.tensor(X.values, dtype=torch.double)), Variable(
-                    torch.tensor(X_val.values, dtype=torch.double))
-        Y, Y_val = Variable(torch.tensor(Y.values, dtype=torch.double)), Variable(
-                    torch.tensor(Y_val.values, dtype=torch.double))
+        # Initialize prediction layer parameters to a pre-trained value
+        if pre_params is not None:
+            with torch.no_grad():
+                self.pred_layer.bias.copy_(pre_params[:,0])
+                self.pred_layer.weight.copy_(pre_params[:,1:])
 
-        # Prepare the data for training as a SlidingWindow dataset
-        train_loader = DataLoader(pc.SlidingWindow(X, Y, self.n_obs, perf_period))
+        # Prepare the training data as a SlidingWindow object
+        train_loader = DataLoader(pc.SlidingWindow(X.train(), Y.train(), self.n_obs, perf_period))
         n_train = len(train_loader)
 
-        # Prepare the data for testing as a SlidingWindow dataset
-        val_loader = DataLoader(pc.SlidingWindow(X_val, Y_val, self.n_obs, perf_period))
-        n_val = len(val_loader)
+        # Prepare the validation data as a SlidingWindow object
+        validate = False
+        if X.val().shape[0] != 0:
+            val_loader = DataLoader(pc.SlidingWindow(X.val(), Y.val(), self.n_obs, perf_period))
+            n_val = len(val_loader)
+            
+            # Initialize value for the "best running model"
+            best_tot_val_loss = float("inf")
+            validate = True
 
         # Prediction loss function
-        pred_loss = torch.nn.MSELoss()
+        if pred_loss_factor is not None:
+            pred_loss = torch.nn.MSELoss()
 
         # Define the optimizer and its parameters
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
 
-        # Initialize value for the "best running model"
-        best_tot_val_loss = float("inf")
-
+        # Define performance loss
         perf_loss = eval('lf.'+perf_loss)
+
+        # Declare InSample object to hold the training results
+        results = pc.InSample()
+
+        # Placeholder for running portfolio
+        z_t = None
 
         # Train the neural network
         if self.nominal:
@@ -363,21 +410,29 @@ class e2e(nn.Module):
             print("============== Training E2E DRO model ==============")
 
         for epoch in range(epochs):
-            
+        
             # TRAINING: forward + backward pass
             tot_loss = 0
             optimizer.zero_grad() 
             for t, (x, y, y_perf) in enumerate(train_loader):
 
-                # Forward: predict and optimize
-                z_star, y_hat = self(x.squeeze(), y.squeeze())
+                # Set an initial portfolio if the turnover rate will be constrained
+                if self.turnover and t==0:
+                    z_t = torch.ones((self.n_y,1), dtype=torch.float64) / self.n_y
+
+                # Forward pass: predict and optimize
+                z_star, y_hat = self(x.squeeze(), y.squeeze(), z_t)
+                if self.turnover:
+                    z_t = z_star.detach().clone()
+
+                # Loss function
                 if pred_loss_factor is None:
                     loss = (1/n_train) * perf_loss(z_star, y_perf.squeeze())
                 else:
                     loss = (1/n_train) * (perf_loss(z_star, y_perf.squeeze()) + 
-                           pred_loss_factor * pred_loss(y_hat, y_perf.squeeze()[0]))
+                           (pred_loss_factor/self.n_y) * pred_loss(y_hat, y_perf.squeeze()[0]))
 
-                # Backward: backpropagation
+                # Backward pass: backpropagation
                 loss.backward()
                 tot_loss += loss.item()
             
@@ -388,52 +443,73 @@ class e2e(nn.Module):
             # Ensure that gamma, delta > 0 after taking a descent step
             for name, param in self.named_parameters():
                 if name=='gamma':
+                    param.data.clamp_(0.0001)
                     results.gamma.append(param.data.numpy()[0])
-                    param.data.clamp_(0.0001)
                 if name=='delta':
-                    results.delta.append(param.data.numpy()[0])
                     param.data.clamp_(0.0001)
+                    results.delta.append(param.data.numpy()[0])
 
-            # VALIDATION
-            tot_val_loss = 0
-            with torch.no_grad():
-                for t, (x, y, y_perf) in enumerate(val_loader):
-                    # Predict and optimize
-                    z_val, y_val = self(x.squeeze(), y.squeeze())
-                    if pred_loss_factor is None:
-                        val_loss = (1/n_val) * perf_loss(z_val, y_perf.squeeze())
+            # Optional: VALIDATION
+            if validate:
+                tot_val_loss = 0
+                with torch.no_grad():
+                    for t, (x, y, y_perf) in enumerate(val_loader):
+
+                        # Set an initial portfolio if the turnover rate will be constrained
+                        if self.turnover and t==0:
+                            z_t = torch.ones((self.n_y,1), dtype=torch.float64) / self.n_y
+
+                        # Predict and optimize
+                        z_val, y_val = self(x.squeeze(), y.squeeze(), z_t)
+                        if self.turnover:
+                            z_t = z_val.detach().clone()
+
+                        # Loss function
+                        if pred_loss_factor is None:
+                            val_loss = (1/n_val) * perf_loss(z_val, y_perf.squeeze())
+                        else:
+                            val_loss = (1/n_val) * (perf_loss(z_val, y_perf.squeeze()) + 
+                               (pred_loss_factor/self.n_y) * pred_loss(y_val, y_perf.squeeze()[0]))
+                        tot_val_loss += val_loss.item()
+                results.val_loss.append(tot_val_loss)
+
+                # Save running model
+                if tot_val_loss < best_tot_val_loss:
+                    best_tot_val_loss = tot_val_loss
+                    if self.nominal:
+                        torch.save(self.state_dict(), model_path+'nom_net_best'+iter_id)
                     else:
-                        val_loss = (1/n_val) * (perf_loss(z_val, y_perf.squeeze()) + 
-                            pred_loss_factor * pred_loss(y_val, y_perf.squeeze()[0]))
-                    tot_val_loss += val_loss.item()
-            results.val_loss.append(tot_val_loss)
-
-            # SAVE RESULTS
-            if tot_val_loss < best_tot_val_loss:
-                best_tot_val_loss = tot_val_loss
-                if self.nominal:
-                    torch.save(self.state_dict(), model_path+'nom_net_best')
-                else:
-                    torch.save(self.state_dict(), model_path+'dro_net_best')
-                print("Model saved")
+                        torch.save(self.state_dict(), model_path+'dro_net_best'+iter_id)
+                    print("Model saved")
 
             # PRINT RESULTS
-            if self.nominal:
-                print("Epoch: %d/%d,  " %(epoch+1,epochs),  
-                    "TrainLoss: %.3f,  " %tot_loss, 
-                    "ValLoss: %.3f,  " %tot_val_loss,
-                    "gamma: %.3f" %results.gamma[epoch])
-            else:
-                print("Epoch: %d/%d, " %(epoch+1,epochs),  
-                    "TrainLoss: %.3f, " %tot_loss, 
-                    "ValLoss: %.3f, " %tot_val_loss,
-                    "gamma: %.3f, " %results.gamma[epoch],
-                    "delta: %.3f" %results.delta[epoch])
+            if validate:
+                if self.nominal:
+                    print("Epoch: %d/%d,  " %(epoch+1,epochs),  
+                        "TrainLoss: %.3f,  " %tot_loss, 
+                        "ValLoss: %.3f,  " %tot_val_loss,
+                        "gamma: %.3f" %results.gamma[epoch])
+                else:
+                    print("Epoch: %d/%d, " %(epoch+1,epochs),  
+                        "TrainLoss: %.3f, " %tot_loss, 
+                        "ValLoss: %.3f, " %tot_val_loss,
+                        "gamma: %.3f, " %results.gamma[epoch],
+                        "delta: %.3f" %results.delta[epoch])
+            else: 
+                if self.nominal:
+                    print("Epoch: %d/%d,  " %(epoch+1,epochs),  
+                        "TrainLoss: %.3f,  " %tot_loss, 
+                        "gamma: %.3f" %results.gamma[epoch])
+                else:
+                    print("Epoch: %d/%d, " %(epoch+1,epochs),  
+                        "TrainLoss: %.3f, " %tot_loss, 
+                        "gamma: %.3f, " %results.gamma[epoch],
+                        "delta: %.3f" %results.delta[epoch])
 
         if self.nominal:
-            torch.save(self.state_dict(), model_path+'nom_net')
+            torch.save(self.state_dict(), model_path+'nom_net_final'+iter_id)
         else:
-            torch.save(self.state_dict(), model_path+'dro_net')
+            torch.save(self.state_dict(), model_path+'dro_net_final'+iter_id)
         print("Final model saved")
 
         return results.df()
@@ -449,28 +525,34 @@ class e2e(nn.Module):
 
         Inputs
         n_obs: Number of residual scenarios to be used during optimization
-        X: Feature data. ([n_obs+n_test] x n_x) matrix of timeseries data
-        Y: Realizations. ([n_obs+n_test] x n_y) matrix of realizations
+        X: Features. TrainValTest object of feature timeseries data
+        Y: Realizations. TrainValTest object of asset time series data
 
         Output
         portfolio: object containing running portfolio weights, returns, and cumulative returns
         """
-        dates = X.index
+        dates = Y.test().index
 
-        # Convert pd.dataframes to torch.variables and trim the dataset
-        X = Variable(torch.tensor(X.values, dtype=torch.double))
-        Y = Variable(torch.tensor(Y.values, dtype=torch.double))
+        # Placeholder for running portfolio
+        z_t = None
 
-        # Prepare the data for testing as a SlidingWindow dataset
-        test_loader = DataLoader(pc.SlidingWindow(X, Y, self.n_obs, 0))
+        # Prepare the data for testing as a SlidingWindow object
+        test_loader = DataLoader(pc.SlidingWindow(X.test(), Y.test(), self.n_obs, 0))
 
         # Declare backtest object to hold the test results
         portfolio = pc.backtest(len(test_loader), self.n_y, dates)
 
         with torch.no_grad():
             for t, (x, y, y_perf) in enumerate(test_loader):
+                
+                # Set an initial portfolio if the turnover rate will be constrained
+                if self.turnover and t==0:
+                    z_t = torch.ones((self.n_y,1), dtype=torch.float64) / self.n_y
+
                 # Predict and optimize
-                z_star, _ = self(x.squeeze(), y.squeeze())
+                z_star, _ = self(x.squeeze(), y.squeeze(), z_t)
+                if self.turnover:
+                    z_t = z_star.clone()
 
                 # Store portfolio weights and returns for each time step 't'
                 portfolio.weights[t] = z_star.squeeze()

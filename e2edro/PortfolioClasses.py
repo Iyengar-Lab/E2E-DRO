@@ -5,9 +5,11 @@
 ####################################################################################################
 ## Import libraries
 ####################################################################################################
-from torch.utils.data import Dataset
 import numpy as np
 import pandas as pd
+import torch
+from torch.utils.data import Dataset
+from torch.autograd import Variable
 
 ####################################################################################################
 # SlidingWindow torch Dataset to index data to use a sliding window
@@ -19,8 +21,8 @@ class SlidingWindow(Dataset):
         """Construct a sliding (i.e., rolling) window dataset from a complete timeseries dataset
 
         Inputs
-        X: Complete feature dataset
-        Y: Complete realizations dataset
+        X: pandas dataframe with the complete feature dataset
+        Y: pandas dataframe with the complete asset return dataset
         n_obs: Number of scenarios in the window
         perf_period: Number of scenarios in the 'performance window' used to evaluate out-of-sample
         performance. The 'performance window' is also a sliding window
@@ -35,15 +37,15 @@ class SlidingWindow(Dataset):
         optimization. Therefore, no pair in 'y' is required (it is assumed the pair y_T is not yet
         observable)
         """
-        self.X = X
-        self.Y = Y
+        self.X = Variable(torch.tensor(X.values, dtype=torch.double))
+        self.Y = Variable(torch.tensor(Y.values, dtype=torch.double))
         self.window = n_obs+1
         self.perf_period = perf_period
 
     def __getitem__(self, index):
         x = self.X[index:index+self.window]
         y = self.Y[index:index+self.window-1]
-        y_perf = self.Y[index+self.window-1:index+self.window+self.perf_period]
+        y_perf = self.Y[index+self.window-1 : index+self.window+self.perf_period]
         return (x, y, y_perf)
 
     def __len__(self):
@@ -98,18 +100,24 @@ class InSample:
         loss: Empty list to hold the training loss after each forward pass
         gamma: Empty list to hold the gamma value after each backward pass
         delta: Empty list to hold the delta value after each backward pass
+        val_loss (optional): Empty list to hold the valildation loss after each forward pass
         """
         self.loss = []
-        self.val_loss = []
         self.gamma = []
         self.delta = []
+        self.val_loss = []
 
     def df(self):
         """Return a pandas dataframe object by merging the self.lists
         """
-        if not self.delta:
+        if not self.delta and not self.val_loss:
+            return pd.DataFrame(list(zip(self.loss, self.gamma)), columns=['loss', 'gamma'])
+        elif not self.delta:
             return pd.DataFrame(list(zip(self.loss, self.val_loss, self.gamma)), 
                             columns=['loss', 'val_loss', 'gamma'])
+        elif not self.val_loss:
+            return pd.DataFrame(list(zip(self.loss, self.gamma, self.delta)), 
+                            columns=['loss', 'gamma', 'delta'])
         else:
             return pd.DataFrame(list(zip(self.loss, self.val_loss, self.gamma, self.delta)), 
                             columns=['loss', 'val_loss', 'gamma', 'delta'])

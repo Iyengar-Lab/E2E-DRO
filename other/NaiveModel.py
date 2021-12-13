@@ -17,6 +17,9 @@ import e2edro.RiskFunctions as rf
 import e2edro.LossFunctions as lf
 import e2edro.PortfolioClasses as pc
 
+from importlib import reload 
+reload(pc)
+
 ####################################################################################################
 # DRO neural network module
 ####################################################################################################
@@ -53,19 +56,15 @@ class pred_then_opt:
         Inputs
         X: Features. ([n_obs+1] x n_x) tensor of timeseries data
         Y: Realizations. (n_obs x n_y) tensor of realizations
-        Theta: regression coefficients
 
         Outputs
         y_hat: (n_y x 1) vector of predicted outcomes (e.g., conditional expected returns)
         ep: (n_obs x n_y) matrix of residuals 
         """
-        x_pred = X[-1]
-        X = X[:-1].squeeze()
         Y_hat = X @ self.Theta
-        y_hat = self.Theta.T @ x_pred
-        ep = Y - Y_hat 
+        ep = Y - Y_hat[:-1].squeeze()
 
-        return y_hat, ep
+        return Y_hat[-1].squeeze(), ep
         
 
     #-----------------------------------------------------------------------------------------------
@@ -104,7 +103,7 @@ class pred_then_opt:
             constraints += [obj_aux[i] >= self.prisk(z, c_aux, ep[i])]
 
         # Objective function
-        objective = cp.Minimize((15/self.n_obs) * cp.sum(obj_aux) - self.gamma * mu_aux)
+        objective = cp.Minimize((1/self.n_obs) * cp.sum(obj_aux) - self.gamma * mu_aux)
 
         # Construct optimization problem
         problem = cp.Problem(objective, constraints)
@@ -120,16 +119,21 @@ class pred_then_opt:
         """Training through OLS regression model
 
         Inputs
-        X: Features. (T x n_x) tensor of timeseries data
-        Y: Realizations. (T x n_y) tensor of realizations
+        X: Features. TrainValTest object of feature timeseries data
+        Y: Realizations. TrainValTest object of asset time series data
 
         Outputs
         self.Theta: Weights. (n_y x [n_x+1]) tensor of regression weights (including intercept)
         """
-        X = Variable(torch.tensor(X.values, dtype=torch.double))
-        X = torch.cat((torch.ones((X.shape[0],1)), X), 1)
-        Y = Variable(torch.tensor(Y.values, dtype=torch.double))
+        # Add a column of ones to the feature dataset 
+        X_train = X.train()
+        X_train.insert(0,'ones',1.0)
+
+        # Subset the train data and convert to torch tensor
+        X = Variable(torch.tensor(X_train.values, dtype=torch.double))
+        Y = Variable(torch.tensor(Y.train().values, dtype=torch.double))
         
+        # Compute OLS weights
         self.Theta = torch.inverse(X.T @ X) @ (X.T @ Y)
 
     #-----------------------------------------------------------------------------------------------
@@ -139,21 +143,24 @@ class pred_then_opt:
         """Out-of-sample test of the simple predict-then-optimize model
 
         Inputs
-        X: Features. (T x n_x) tensor of timeseries data
-        Y: Realizations. (T x n_y) tensor of realizations
+        X: Features. TrainValTest object of feature timeseries data
+        Y: Realizations. TrainValTest object of asset time series data
 
         Output
         portfolio: object containing running portfolio weights, returns, and cumulative returns
         """
-        dates = X.index
+        # Store the test period dates
+        dates = Y.test().index
 
-        # Convert pd.dataframes to torch.variables and trim the dataset
-        X = Variable(torch.tensor(X.values, dtype=torch.double))
-        X = torch.cat((torch.ones((X.shape[0],1)), X), 1)
-        Y = Variable(torch.tensor(Y.values, dtype=torch.double))
+        # Add a column of oones to account for the intercept
+        X_test = X.test()
+        X_test.insert(0,'ones',1.0)
 
-        # Prepare the data for testing as a SlidingWindow dataset
-        test_loader = DataLoader(pc.SlidingWindow(X, Y, self.n_obs, 0))
+        # Prepare the data for testing as a SlidingWindow object
+        test_loader = DataLoader(pc.SlidingWindow(X_test, Y.test(), self.n_obs, 0))
+
+        # Free memory
+        del X_test
 
         # Declare backtest object to hold the test results
         portfolio = pc.backtest(len(test_loader), self.n_y, dates)
