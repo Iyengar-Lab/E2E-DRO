@@ -193,7 +193,7 @@ def FamaFrench(start, end, split, freq=''):
 # https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html 
 # https://www.alphavantage.co 
 #-----------------------------------------------------------------------------------------------
-def AV(start, end, split, freq='weekly', use_cache=False):
+def AV(start, end, split, freq='weekly', use_cache=False, n_y=None):
     """Load data from Kenneth French's data library
     https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html 
 
@@ -215,6 +215,11 @@ def AV(start, end, split, freq='weekly', use_cache=False):
             X = pickle.load(inp)
             Y = pickle.load(inp)
     else:
+        tick_list = ['AAPL', 'MSFT', 'AMZN', 'C', 'JPM', 'BAC', 'XOM', 'HAL', 'MCD', 'WMT', 'COST', 'CAT', 'LMT', 'JNJ', 'PFE', 'DIS', 'VZ', 'T', 'ED', 'NEM']
+
+        if n_y is not None:
+            tick_list = tick_list[:n_y]
+
         ts = TimeSeries(key='CV2O4TLLVRI8TGMD', output_format='pandas', indexing_type='date')
 
         if freq == 'daily' or freq == '_daily':
@@ -222,7 +227,6 @@ def AV(start, end, split, freq='weekly', use_cache=False):
             freq = '_daily'
 
             # Download asset data
-            tick_list = ['AAPL', 'MSFT', 'AMZN', 'C', 'JPM', 'BAC', 'XOM', 'HAL', 'MCD', 'WMT', 'COST', 'CAT', 'LMT', 'JNJ', 'PFE']
             Y = []
             for tick in tick_list:
                 data, _ = ts.get_daily_adjusted(symbol=tick, outputsize='full')
@@ -251,7 +255,6 @@ def AV(start, end, split, freq='weekly', use_cache=False):
             freq = '_daily'
 
             # Download asset data
-            tick_list = ['AAPL', 'MSFT', 'AMZN', 'C', 'JPM', 'BAC', 'XOM', 'HAL', 'MCD', 'WMT', 'COST', 'CAT', 'LMT', 'JNJ', 'PFE']
             Y = []
             for tick in tick_list:
                 data, _ = ts.get_daily_adjusted(symbol=tick, outputsize='full')

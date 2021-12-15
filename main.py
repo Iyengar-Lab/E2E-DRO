@@ -45,7 +45,8 @@ end = '2021-09-30'
 split = [0.5, 0.2, 0.3]
 
 # Load data
-X, Y = dl.AV(start, end, split, freq=freq, use_cache=True)
+n_y = 6
+X, Y = dl.AV(start, end, split, freq=freq, use_cache=True, n_y=n_y)
 
 # Number of features and assets
 n_x, n_y = X.data.shape[1], Y.data.shape[1]
@@ -60,7 +61,7 @@ n_obs = 104
 perf_loss='sharpe_loss'
 perf_period = 10
 pred_loss_factor = 0.2
-epochs = 4
+epochs = 15
 prisk = 'p_var'
 opt_layer = 'hellinger'
 
@@ -83,12 +84,12 @@ naive_p = naive_net.test(X, Y)
 # %% E2E Nominal neural net
 #---------------------------------------------------------------------------------------------------
 # Set learning rate
-lr = 0.02
+lr = 0.01
 turnover = False
 
-split2 = [0.7, 0, 0.3]
-X.split_update(split2)
-Y.split_update(split2)
+# split2 = [0.7, 0, 0.3]
+# X.split_update(split2)
+# Y.split_update(split2)
 
 # Neural net object (use CUDA if available)
 nom_net = dro.e2e(n_x, n_y, n_obs, prisk=prisk, turnover=turnover).double()

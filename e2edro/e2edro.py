@@ -16,9 +16,6 @@ import e2edro.RiskFunctions as rf
 import e2edro.LossFunctions as lf
 import e2edro.PortfolioClasses as pc
 
-from importlib import reload 
-reload(pc)
-
 model_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/saved_models/"
 
 ####################################################################################################
@@ -328,7 +325,7 @@ class e2e(nn.Module):
         y_hat = Y_hat[-1]
 
         # Optimization solver arguments (from CVXPY for SCS solver)
-        solver_args = {'eps': 1e-12, 'acceleration_lookback': 0, 'max_iters':25000}
+        solver_args = {'solve_method': 'ECOS', 'eps': 1e-12, 'acceleration_lookback': 0, 'max_iters':25000}
 
         # Optimize z per scenario
         # Determine whether nominal or dro model, and whether turnover is constrained or not
