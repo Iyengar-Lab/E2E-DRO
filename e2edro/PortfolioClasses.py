@@ -39,23 +39,23 @@ class SlidingWindow(Dataset):
         """
         self.X = Variable(torch.tensor(X.values, dtype=torch.double))
         self.Y = Variable(torch.tensor(Y.values, dtype=torch.double))
-        self.window = n_obs+1
+        self.n_obs = n_obs
         self.perf_period = perf_period
 
     def __getitem__(self, index):
-        x = self.X[index:index+self.window]
-        y = self.Y[index:index+self.window-1]
-        y_perf = self.Y[index+self.window-1 : index+self.window+self.perf_period]
+        x = self.X[index:index+self.n_obs+1]
+        y = self.Y[index:index+self.n_obs]
+        y_perf = self.Y[index+self.n_obs : index+self.n_obs+self.perf_period+1]
         return (x, y, y_perf)
 
     def __len__(self):
-        return len(self.X) - self.window - self.perf_period
+        return len(self.X) - self.n_obs - self.perf_period
 
 ####################################################################################################
 # Backtest object to store out-of-sample results
 ####################################################################################################
 class backtest:
-    """Portfolio object
+    """backtest object
     """
     def __init__(self, len_test, n_y, dates):
         """Portfolio object. Stores the NN out-of-sample results
@@ -87,13 +87,13 @@ class backtest:
         self.rets = self.rets.set_index('Date')
 
 ####################################################################################################
-# Backtest object to store out-of-sample results
+# InSample object to store in-sample results
 ####################################################################################################
 class InSample:
-    """Portfolio object
+    """InSample object
     """
     def __init__(self):
-        """Portfolio object. Stores the NN out-of-sample results
+        """Portfolio object. Stores the NN in-sample results
 
         Output
         InSample object with fields:
@@ -122,4 +122,30 @@ class InSample:
             return pd.DataFrame(list(zip(self.loss, self.val_loss, self.gamma, self.delta)), 
                             columns=['loss', 'val_loss', 'gamma', 'delta'])
 
+
+####################################################################################################
+# Backtest object to store out-of-sample results
+####################################################################################################
+class CrossVal:
+    """Portfolio object
+    """
+    def __init__(self):
+        """CrossVal object. Stores the NN in-sample cross validation results
+
+        Output
+        CrossVal object with fields:
+        lr: Empty list to hold the learning rate of this run
+        epochs: Empty list to hold the number of epochs in this run
+        train_loss: Empty list to hold the average training loss of all folds
+        val_loss: Empty list to hold the average validation loss of all folds
+        """
+        self.lr = []
+        self.epochs = []
+        self.val_loss = []
+
+    def df(self):
+        """Return a pandas dataframe object by merging the self.lists
+        """
+        return pd.DataFrame(list(zip(self.lr, self.epochs, self.val_loss)), 
+                            columns=['lr', 'epochs', 'val_loss'])
 

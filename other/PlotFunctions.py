@@ -79,13 +79,15 @@ def wealth_plot(nom_df, dro_df, naive_df=None, path=None):
 
     if naive_df is not None:
         ax.plot(plot_df.naive, color="forestgreen")
-        ax.legend(["Nominal", "DRO", "Naive"])
+        ax.legend(["Nominal E2E", "DR E2E", "Pred.-then-Opt."], fontsize=14)
     else:
-        ax.legend(["Nominal", "DRO"])
+        ax.legend(["Nominal E2E", "DR E2E"], fontsize=14)
 
-    ax.set_ylabel("Total wealth",fontsize=12)
     ax.grid(b="on",linestyle=":",linewidth=0.8)
     ax.tick_params(axis='x', labelrotation = 30)
+    plt.ylabel("Total wealth", fontsize=14)
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
 
     if path is not None:
         fig.savefig(path, bbox_inches='tight')

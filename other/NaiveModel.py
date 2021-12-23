@@ -5,176 +5,164 @@
 ####################################################################################################
 ## Import libraries
 ####################################################################################################
+import numpy as np
 import cvxpy as cp
+from cvxpylayers.torch import CvxpyLayer
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
 
 my_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL"
 import sys
 sys.path.append(my_path+"/E2E-DRO")
+
 import e2edro.RiskFunctions as rf
-import e2edro.LossFunctions as lf
 import e2edro.PortfolioClasses as pc
+import e2edro.e2edro2 as e2e
 
 from importlib import reload 
 reload(pc)
 
-####################################################################################################
-# DRO neural network module
-####################################################################################################
-class pred_then_opt:
+model_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/saved_models/"
 
-    def __init__(self, n_x, n_y, n_obs, prisk='p_var', gamma=1.5):
-        """
-        Predict-then-optimize model
-        
-        This is a naive counterpart to the E2E learning framework and serves as a benchmark. 
+####################################################################################################
+# Naive 'predict-then-optimize'
+####################################################################################################
+class pred_then_opt(nn.Module):
+    """Naive 'predict-then-optimize' portfolio construction module
+    """
+    def __init__(self, n_x, n_y, n_obs, gamma=0.1, prisk='p_var'):
+        """Naive 'predict-then-optimize' portfolio construction module
+
+        This NN module implements a linear prediction layer 'pred_layer' and an optimization layer 
+        'opt_layer'. The model is 'naive' since it optimizes each layer separately. 
 
         Inputs
-        n_x: number of inputs (i.e., features) in the prediction model
-        n_y: number of outputs from the prediction model
+        n_x: Number of inputs (i.e., features) in the prediction model
+        n_y: Number of outputs from the prediction model
         n_obs: Number of scenarios from which to calculate the sample set of residuals
-        prisk: Portfolio risk function. Used in the optimization problem
-        gamma: Scalar. Trade-off between conditional expected return and model error.
-
+        prisk: String. Portfolio risk function. Used in the opt_layer
+        
         Output
-        pred_then_opt object 
+        pred_then_opt: nn.Module object 
         """
+        super(pred_then_opt, self).__init__()
+
         self.n_x = n_x
         self.n_y = n_y
         self.n_obs = n_obs
-        self.prisk = eval('rf.'+prisk)
-        self.gamma = gamma
+
+        # Store 'gamma' (risk-return trade-off parameter)
+        self.gamma = torch.tensor(gamma, dtype=torch.double)
+
+        # LAYER: OLS linear prediction
+        self.pred_layer = nn.Linear(n_x, n_y)
+        self.pred_layer.weight.requires_grad = False
+        self.pred_layer.bias.requires_grad = False
+        
+        # LAYER: Optimization
+        self.opt_layer = e2e.nominal(n_y, n_obs, eval('rf.'+prisk))
 
     #-----------------------------------------------------------------------------------------------
-    # pred: Prediction from OLS regression model
+    # forward: forward pass of the e2e neural net
     #-----------------------------------------------------------------------------------------------
-    def pred(self, X, Y):
-        """Prediction from OLS regression model
+    def forward(self, X, Y):
+        """Forward pass of the predict-then-optimize module
+
+        The inputs 'X' are passed through the prediction layer to yield predictions 'Y_hat'. The
+        residuals from prediction are then calcuclated as 'ep = Y - Y_hat'. Finally, the residuals
+        are passed to the optimization layer to find the optimal decision z_star.
 
         Inputs
-        X: Features. ([n_obs+1] x n_x) tensor of timeseries data
-        Y: Realizations. (n_obs x n_y) tensor of realizations
+        X: Features. ([n_obs+1] x n_x) torch tensor with feature timeseries data
+        Y: Realizations. (n_obs x n_y) torch tensor with asset timeseries data
+
+        Other 
+        ep: Residuals. (n_obs x n_y) matrix of the residual between realizations and predictions
 
         Outputs
-        y_hat: (n_y x 1) vector of predicted outcomes (e.g., conditional expected returns)
-        ep: (n_obs x n_y) matrix of residuals 
+        y_hat: Prediction. (n_y x 1) vector of outputs of the prediction layer
+        z_star: Optimal solution. (n_y x 1) vector of asset weights
         """
-        Y_hat = X @ self.Theta
-        ep = Y - Y_hat[:-1].squeeze()
+        # Predict y_hat from x
+        Y_hat = torch.stack([self.pred_layer(x_t) for x_t in X])
 
-        return Y_hat[-1].squeeze(), ep
-        
+        # Calculate residuals and process them
+        ep = Y - Y_hat[:-1]
+        y_hat = Y_hat[-1]
+
+        # Optimization solver arguments (from CVXPY for SCS solver)
+        solver_args = {'solve_method': 'ECOS'}
+
+        # Optimize z per scenario
+        # Determine whether nominal or dro model
+        z_star, = self.opt_layer(ep, y_hat, self.gamma, solver_args=solver_args)
+
+        return z_star, y_hat
 
     #-----------------------------------------------------------------------------------------------
-    # opt: CVXPY portfolio optimization problem
+    # net_test: Test the e2e neural net
     #-----------------------------------------------------------------------------------------------
-    def opt(self, y_hat, ep):
-        """Nominal optimization problem
-
-        Inputs
-        ep: (n_obs x n_y) matrix of residuals 
-        y_hat: (n_y x 1) vector of predicted outcomes (e.g., conditional expected returns)
-        
-        Variables
-        z: Decision variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
-        c_aux: Auxiliary Variable. Scalar
-        obj_aux: Auxiliary Variable. (n_obs x 1) vector.
-        mu_aux: Auxiliary Variable. Scalar. Represents the portfolio conditional expected return.
-        
-        Constraints
-        Total budget is equal to 100%, sum(z) == 1
-        Long-only positions (no short sales), z >= 0 (specified during the cp.Variable() call)
-
-        Objective
-        Minimize (1/n_obs) * cp.sum(obj_aux) - gamma * mu_aux
+    def net_roll_test(self, X, Y, n_roll=5):
+        """Neural net rolling window out-of-sample test
         """
-        # Variables
-        z = cp.Variable((self.n_y,1), nonneg=True)
-        c_aux = cp.Variable()
-        obj_aux = cp.Variable(self.n_obs)
-        mu_aux = cp.Variable()
-        
-        # Constraints
-        constraints = [cp.sum(z) == 1,
-                    mu_aux == y_hat @ z]
-        for i in range(self.n_obs):
-            constraints += [obj_aux[i] >= self.prisk(z, c_aux, ep[i])]
-
-        # Objective function
-        objective = cp.Minimize((1/self.n_obs) * cp.sum(obj_aux) - self.gamma * mu_aux)
-
-        # Construct optimization problem
-        problem = cp.Problem(objective, constraints)
-
-        problem.solve(solver=cp.SCS, eps=1e-10, max_iters=25000)
-
-        return z.value
-
-    #-----------------------------------------------------------------------------------------------
-    # train: Naive model training through OLS regression
-    #-----------------------------------------------------------------------------------------------
-    def train(self, X, Y):
-        """Training through OLS regression model
-
-        Inputs
-        X: Features. TrainValTest object of feature timeseries data
-        Y: Realizations. TrainValTest object of asset time series data
-
-        Outputs
-        self.Theta: Weights. (n_y x [n_x+1]) tensor of regression weights (including intercept)
-        """
-        # Add a column of ones to the feature dataset 
-        X_train = X.train()
-        X_train.insert(0,'ones',1.0)
-
-        # Subset the train data and convert to torch tensor
-        X = Variable(torch.tensor(X_train.values, dtype=torch.double))
-        Y = Variable(torch.tensor(Y.train().values, dtype=torch.double))
-        
-        # Compute OLS weights
-        self.Theta = torch.inverse(X.T @ X) @ (X.T @ Y)
-
-    #-----------------------------------------------------------------------------------------------
-    # test: Naive model test
-    #-----------------------------------------------------------------------------------------------
-    def test(self, X, Y):
-        """Out-of-sample test of the simple predict-then-optimize model
-
-        Inputs
-        X: Features. TrainValTest object of feature timeseries data
-        Y: Realizations. TrainValTest object of asset time series data
-
-        Output
-        portfolio: object containing running portfolio weights, returns, and cumulative returns
-        """
-        # Store the test period dates
-        dates = Y.test().index
-
-        # Add a column of oones to account for the intercept
-        X_test = X.test()
-        X_test.insert(0,'ones',1.0)
-
-        # Prepare the data for testing as a SlidingWindow object
-        test_loader = DataLoader(pc.SlidingWindow(X_test, Y.test(), self.n_obs, 0))
-
-        # Free memory
-        del X_test
 
         # Declare backtest object to hold the test results
-        portfolio = pc.backtest(len(test_loader), self.n_y, dates)
+        portfolio = pc.backtest(len(Y.test())-Y.n_obs, self.n_y, Y.test().index[Y.n_obs:])
 
-        for t, (x, y, y_perf) in enumerate(test_loader):
-            # Predict and optimize
-            y_hat, ep = self.pred(x.squeeze(), y.squeeze())
-            z_star = self.opt(y_hat, ep)
+        # Store initial train/test split
+        init_split = Y.split
 
-            # Store portfolio weights and returns for each time step 't'
-            portfolio.weights[t] = z_star.squeeze()
-            portfolio.rets[t] = y_perf.squeeze() @ portfolio.weights[t]
+        # Window size
+        win_size = init_split[1] / n_roll
+
+        split = [0, 0]
+        t = 0
+        for i in range(n_roll):
+
+            print(f"Out-of-sample window: {i+1} / {n_roll}")
+
+            split[0] = init_split[0] + win_size * i
+            if i < n_roll-1:
+                split[1] = win_size
+            else:
+                split[1] = 1 - split[0]
+
+            X.split_update(split), Y.split_update(split)
+            test_set = DataLoader(pc.SlidingWindow(X.test(), Y.test(), self.n_obs, 0))
+
+            X_train, Y_train = X.train(), Y.train()
+            X_train.insert(0,'ones', 1.0)
+
+            X_train = Variable(torch.tensor(X_train.values, dtype=torch.double))
+            Y_train = Variable(torch.tensor(Y_train.values, dtype=torch.double))
+        
+            Theta = torch.inverse(X_train.T @ X_train) @ (X_train.T @ Y_train)
+            Theta = Theta.T
+            del X_train, Y_train
+
+            with torch.no_grad():
+                self.pred_layer.bias.copy_(Theta[:,0])
+                self.pred_layer.weight.copy_(Theta[:,1:])
+
+            # Test model
+            with torch.no_grad():
+                for j, (x, y, y_perf) in enumerate(test_set):
+                
+                    # Predict and optimize
+                    z_star, _ = self(x.squeeze(), y.squeeze())
+
+                    # Store portfolio weights and returns for each time step 't'
+                    portfolio.weights[t] = z_star.squeeze()
+                    portfolio.rets[t] = y_perf.squeeze() @ portfolio.weights[t]
+
+                    t += 1
+
+        # Reset dataset
+        X, Y = X.split_update(init_split), Y.split_update(init_split)
 
         # Calculate the portfolio statistics using the realized portfolio returns
         portfolio.stats()
 
-        return portfolio
+        self.portfolio = portfolio
