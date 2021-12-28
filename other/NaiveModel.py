@@ -166,3 +166,48 @@ class pred_then_opt(nn.Module):
         portfolio.stats()
 
         self.portfolio = portfolio
+
+####################################################################################################
+# Naive 'predict-then-optimize'
+####################################################################################################
+class equal_weight:
+    """Naive 'equally-weighted' portfolio construction module
+    """
+    def __init__(self, n_x, n_y, n_obs):
+        """Naive 'equally-weighted' portfolio construction module
+
+        This object implements a basic equally-weighted investment strategy.
+
+        Inputs
+        n_x: Number of inputs (i.e., features) in the prediction model
+        n_y: Number of outputs from the prediction model
+        n_obs: Number of scenarios from which to calculate the sample set of residuals
+        """
+        self.n_x = n_x
+        self.n_y = n_y
+        self.n_obs = n_obs
+
+    #-----------------------------------------------------------------------------------------------
+    # net_test: Test the e2e neural net
+    #-----------------------------------------------------------------------------------------------
+    def net_roll_test(self, X, Y, n_roll=5):
+        """Neural net rolling window out-of-sample test
+        """
+
+        # Declare backtest object to hold the test results
+        portfolio = pc.backtest(len(Y.test())-Y.n_obs, self.n_y, Y.test().index[Y.n_obs:])
+
+        test_set = DataLoader(pc.SlidingWindow(X.test(), Y.test(), self.n_obs, 0))
+
+        # Test model
+        t = 0
+        for j, (x, y, y_perf) in enumerate(test_set):
+            
+            portfolio.weights[t] = np.ones(self.n_y) / self.n_y
+            portfolio.rets[t] = y_perf.squeeze() @ portfolio.weights[t]
+            t += 1
+
+        # Calculate the portfolio statistics using the realized portfolio returns
+        portfolio.stats()
+
+        self.portfolio = portfolio

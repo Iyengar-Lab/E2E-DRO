@@ -73,7 +73,7 @@ set_seed = 1
 
 lr_list = [0.01, 0.02, 0.03]
 epoch_list = [10, 20, 30]
-use_cache = False
+use_cache = True
 
 #---------------------------------------------------------------------------------------------------
 # %% Run neural nets
@@ -83,6 +83,9 @@ if use_cache:
         nom_net = pickle.load(inp)
         dro_net = pickle.load(inp)
         naive_net = pickle.load(inp)
+
+    with open(model_path+'basis_net'+'_TrainPred'+str(train_pred)+'.pkl', 'rb') as inp:
+        maxR_net = pickle.load(inp)
 
 else:
     # Nominal E2E neural net
@@ -104,16 +107,72 @@ else:
     naive_net = nm.pred_then_opt(n_x, n_y, n_obs, gamma=init_gamma, prisk=prisk).double()
     naive_net.net_roll_test(X, Y, n_roll=4)
 
+    # Basis E2E neural net
+    maxR_net = dro2.e2e(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, set_seed=set_seed,
+                        opt_layer='max_ret', perf_loss=perf_loss, perf_period=perf_period,
+                        pred_loss_factor=pred_loss_factor).double()
+    maxR_net.net_cv(X, Y, lr_list, epoch_list)
+    maxR_net.net_roll_test(X, Y, n_roll=4)
+
     with open(model_path+'nom_dro_nets_'+prisk+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
         pickle.dump(nom_net, outp, pickle.HIGHEST_PROTOCOL)
         pickle.dump(dro_net, outp, pickle.HIGHEST_PROTOCOL)
         pickle.dump(naive_net, outp, pickle.HIGHEST_PROTOCOL)
 
+    with open(model_path+'basis_net'+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
+        pickle.dump(maxR_net, outp, pickle.HIGHEST_PROTOCOL)
+
+ew_net = nm.equal_weight(n_x, n_y, n_obs)
+ew_net.net_roll_test(X, Y, n_roll=4)
+
 ####################################################################################################
 # %% Plots
 ####################################################################################################
 
+# Validation results table
+pd.concat((nom_net.cv_results.round(3), dro_net.cv_results.val_loss.round(3), 
+            maxR_net.cv_results.val_loss.round(3)), axis=1).to_latex()
+
+# Out-of-sample summary statistics table
+
+
+
+reload(pf)
 #---------------------------------------------------------------------------------------------------
 # Wealth evolution plot
 #---------------------------------------------------------------------------------------------------
 pf.wealth_plot(nom_net.portfolio, dro_net.portfolio, naive_net.portfolio, path=my_path+"/plots/wealth.pdf")
+
+pf.wealth_plot(nom_net.portfolio, dro_net.portfolio, naive_net.portfolio, maxR_net.portfolio, 
+                ew_net.portfolio, path=my_path+"/plots/wealth.pdf")
+
+
+
+# reload(pf)
+# #---------------------------------------------------------------------------------------------------
+# # Loss plots
+# #---------------------------------------------------------------------------------------------------
+# pf.loss_plot_multiple(nom_results[:5], dro_results[:5], path=my_path+"/plots/loss_multi_1.pdf")
+# pf.loss_plot_multiple(nom_results[5:], dro_results[5:], path=my_path+"/plots/loss_multi_2.pdf")
+
+# pf.loss_plot_multiple(nom_results, dro_results, path=my_path+"/plots/loss_multi.pdf")
+
+# reload(pf)
+# #---------------------------------------------------------------------------------------------------
+# # Gamma and delta plots
+# #---------------------------------------------------------------------------------------------------
+# pf.gamma_plot_multiple(nom_results[:5], dro_results[:5], path=my_path+"/plots/gamma_multi_1.pdf")
+# pf.gamma_plot_multiple(nom_results[5:], dro_results[5:], path=my_path+"/plots/gamma_multi_2.pdf")
+
+# pf.gamma_plot_multiple(nom_results, dro_results, path=my_path+"/plots/gamma_multi.pdf")
+
+# reload(pf)
+# #---------------------------------------------------------------------------------------------------
+# # Wealth evolution plots
+# #---------------------------------------------------------------------------------------------------
+# pf.wealth_plot_multiple(nom_p_best[:5], dro_p_best[:5], path=my_path+"/plots/wealth_multi_1.pdf")
+# pf.wealth_plot_multiple(nom_p_best[5:], dro_p_best[5:], path=my_path+"/plots/wealth_multi_2.pdf")
+
+# pf.wealth_plot_multiple(nom_p_best, dro_p_best, path=my_path+"/plots/wealth_multi.pdf")
+
+# pf.wealth_plot_multiple(nom_p_best, dro_p_best)

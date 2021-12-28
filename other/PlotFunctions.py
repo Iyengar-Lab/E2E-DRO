@@ -59,29 +59,52 @@ def gamma_plot(df, path=None):
 #---------------------------------------------------------------------------------------------------
 # wealth_plot function
 #---------------------------------------------------------------------------------------------------
-def wealth_plot(nom_df, dro_df, naive_df=None, path=None):
+def wealth_plot(nom_df, dro_df, naive_df=None, maxR_df=None, ew_df=None, path=None):
 
+    # if naive_df is not None:
+    #     plot_df = pd.concat([nom_df.rets.tri.rename("nom")*100, dro_df.rets.tri.rename("dro")*100, 
+    #                 naive_df.rets.tri.rename("naive")*100], axis=1)
+    #     s = pd.DataFrame({"nom": [100], "dro": [100], "naive": [100]})
+    # else:
+    #     plot_df = pd.concat([nom_df.rets.tri.rename("nom")*100, dro_df.rets.tri.rename("dro")*100], 
+    #                 axis=1)
+    #     s = pd.DataFrame({"nom": [100], "dro": [100]})
+
+    plot_df = pd.concat([nom_df.rets.tri.rename("nom")*100, dro_df.rets.tri.rename("dro")*100], 
+                        axis=1)
+    s = pd.DataFrame({"nom": [100], "dro": [100]})
     if naive_df is not None:
-        plot_df = pd.concat([nom_df.rets.tri.rename("nom")*100, dro_df.rets.tri.rename("dro")*100, 
-                    naive_df.rets.tri.rename("naive")*100], axis=1)
-        s = pd.DataFrame({"nom": [100], "dro": [100], "naive": [100]})
-    else:
-        plot_df = pd.concat([nom_df.rets.tri.rename("nom")*100, dro_df.rets.tri.rename("dro")*100], 
-                    axis=1)
-        s = pd.DataFrame({"nom": [100], "dro": [100]})
-
+        plot_df = pd.concat([plot_df, naive_df.rets.tri.rename("naive")*100], axis=1)
+        s = pd.concat([s, pd.DataFrame({"naive": [100]})], axis=1)
+    if maxR_df is not None:
+        plot_df = pd.concat([plot_df, maxR_df.rets.tri.rename("maxR")*100], axis=1)
+        s = pd.concat([s, pd.DataFrame({"maxR": [100]})], axis=1)
+    if ew_df is not None:
+        plot_df = pd.concat([plot_df, ew_df.rets.tri.rename("ew")*100], axis=1)
+        s = pd.concat([s, pd.DataFrame({"ew": [100]})], axis=1)
+        
     s.index = [plot_df.index[0]-pd.Timedelta(days=7)]
     plot_df = pd.concat([s, plot_df])
 
     fig, ax = plt.subplots(figsize=(6,4))
     ax.plot(plot_df.nom, color="dodgerblue")
     ax.plot(plot_df.dro, color="salmon")
-
+    if maxR_df is not None:
+        ax.plot(plot_df.maxR, color="forestgreen")
     if naive_df is not None:
-        ax.plot(plot_df.naive, color="forestgreen")
-        ax.legend(["Nominal E2E", "DR E2E", "Pred.-then-Opt."], fontsize=14)
+        ax.plot(plot_df.naive, color="goldenrod")
+    if ew_df is not None:
+        ax.plot(plot_df.ew, color="dimgray")
+    
+    if (naive_df is not None) and (maxR_df is not None) and (ew_df is not None):
+        ax.legend(["Nom. E2E", "DR E2E", "Base E2E", "Pred.-then-Opt.", "Equal weight"], 
+                    fontsize=14)
+    elif naive_df is not None:
+        ax.legend(["Nom. E2E", "DR E2E", "Pred.-then-Opt."], fontsize=14)
+    elif maxR_df is not None:
+        ax.legend(["Nom. E2E", "DR E2E", "Base E2E"], fontsize=14)
     else:
-        ax.legend(["Nominal E2E", "DR E2E"], fontsize=14)
+        ax.legend(["Nom. E2E", "DR E2E"], fontsize=14)
 
     ax.grid(b="on",linestyle=":",linewidth=0.8)
     ax.tick_params(axis='x', labelrotation = 30)

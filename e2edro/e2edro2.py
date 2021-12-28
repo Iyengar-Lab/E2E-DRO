@@ -27,6 +27,50 @@ reload(pc)
 # CvxpyLayers: Differentiable optimization layers (nominal and distributionally robust)
 ####################################################################################################
 #---------------------------------------------------------------------------------------------------
+# max_return: CvxpyLayer that declares the portfolio optimization problem
+#---------------------------------------------------------------------------------------------------
+def max_ret(n_y, n_obs, prisk):
+    """Nominal optimization problem declared as a CvxpyLayer object
+
+    Inputs
+    n_y: number of assets
+    n_obs: Number of scenarios in the dataset
+    prisk: Portfolio risk function
+    
+    Variables
+    z: Decision variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
+    
+    Parameters
+    ep: (n_obs x n_y) matrix of residuals 
+    y_hat: (n_y x 1) vector of predicted outcomes (e.g., conditional expected
+    returns)
+    gamma: Scalar. Trade-off between conditional expected return and model error.
+
+    Constraints
+    Total budget is equal to 100%, sum(z) == 1
+    Long-only positions (no short sales), z >= 0 (specified during the cp.Variable() call)
+
+    Objective
+    Minimize -y_hat @ z
+    """
+    # Variables
+    z = cp.Variable((n_y,1), nonneg=True)
+
+    # Parameters
+    y_hat = cp.Parameter(n_y)
+    
+    # Constraints
+    constraints = [cp.sum(z) == 1]
+
+    # Objective function
+    objective = cp.Minimize(-y_hat @ z)
+
+    # Construct optimization problem and differentiable layer
+    problem = cp.Problem(objective, constraints)
+
+    return CvxpyLayer(problem, parameters=[y_hat], variables=[z])
+
+#---------------------------------------------------------------------------------------------------
 # nominal: CvxpyLayer that declares the portfolio optimization problem
 #---------------------------------------------------------------------------------------------------
 def nominal(n_y, n_obs, prisk):
@@ -288,14 +332,14 @@ class e2e(nn.Module):
         
         # Record the model design: nominal or DRO
         if opt_layer == 'nominal':
-            self.nominal = True 
             self.model_type = 'nom'
+        elif opt_layer == 'max_ret':
+            self.gamma.requires_grad = False
+            self.model_type = 'max_ret' 
         else:
-            self.nominal = False
-            self.model_type = 'dro'
-
             # Register 'delta' (ambiguity sizing parameter) for DRO model
             self.delta = nn.Parameter(torch.rand(1)/15 + 0.025)
+            self.model_type = 'dro'
 
         # Store initial model
         torch.save(self.state_dict(), model_path+self.model_type+'_initial_state')
@@ -333,11 +377,13 @@ class e2e(nn.Module):
 
         # Optimize z per scenario
         # Determine whether nominal or dro model
-        if self.nominal:
+        if self.model_type == 'nom':
             z_star, = self.opt_layer(ep, y_hat, self.gamma, solver_args=solver_args)
-        else:
+        elif self.model_type == 'dro':
             z_star, = self.opt_layer(ep, y_hat, self.gamma, self.delta,
                         solver_args=solver_args)
+        elif self.model_type == 'max_ret':
+            z_star, = self.opt_layer(y_hat, solver_args=solver_args)
 
         return z_star, y_hat
 
@@ -433,9 +479,9 @@ class e2e(nn.Module):
 
         # If val_set is None, then save the parameters of the fully trained model
         else:
-            if self.nominal:
+            if self.model_type == 'nom':
                 torch.save(self.state_dict(), model_path+'nom_net_full')
-            else:
+            elif self.model_type == 'dro':
                 torch.save(self.state_dict(), model_path+'dro_net_full')
             print("Trained model saved")
 
@@ -464,10 +510,12 @@ class e2e(nn.Module):
                 
                 # Train the neural network
                 print('================================================')
-                if self.nominal:
+                if self.model_type == 'nom':
                     print(f"Training E2E nominal model: lr={lr}, epochs={epochs}")
-                else:
+                elif self.model_type == 'dro':
                     print(f"Training E2E DR model: lr={lr}, epochs={epochs}")
+                elif self.model_type == 'max_ret':
+                    print(f"Training E2E maxR model: lr={lr}, epochs={epochs}")
 
                 val_loss_tot = []
                 for i in range(n_val):
@@ -522,10 +570,12 @@ class e2e(nn.Module):
         self.epochs = self.cv_results.epochs[idx]
 
         # Print optimal parameters
-        if self.nominal:
+        if self.model_type == 'nom':
             print(f"E2E nominal with optimal hyperparameters: lr={self.lr}, epochs={self.epochs}")
-        else:
-            print(f"CV E2E dro with optimal  hyperparameters: lr={self.lr}, epochs={self.epochs}")
+        elif self.model_type == 'dro':
+            print(f"CV E2E dro with optimal hyperparameters: lr={self.lr}, epochs={self.epochs}")
+        elif self.model_type == 'max_ret':
+            print(f"CV E2E maxR with optimal hyperparameters: lr={self.lr}, epochs={self.epochs}")
 
     #-----------------------------------------------------------------------------------------------
     # net_test: Test the e2e neural net
