@@ -1,13 +1,8 @@
-# DataLoader module
-# 
-# Loads data from Kenneth R. French's database OR generates syntehtic data
-#
-# Prepared by: Giorgio Costa (gc2958@columbia.edu)
+# DataLoad module
 #
 ####################################################################################################
 ## Import libraries
 ####################################################################################################
-import pickle
 import torch
 from torch.autograd import Variable
 import pandas as pd
@@ -15,8 +10,6 @@ import pandas_datareader as pdr
 import numpy as np
 from alpha_vantage.timeseries import TimeSeries
 import time
-
-data_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/saved_models/"
 
 ####################################################################################################
 # TrainTest class
@@ -207,11 +200,9 @@ def AV(start, end, split, freq='weekly', n_obs=104, use_cache=False, n_y=None):
     Y: TrainTest object with asset data split into train, validation and test subsets
     """
 
-    data_path = '/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/saved_models/'
-
     if use_cache:
-        X = pd.read_pickle(data_path+'factor_'+freq+'.pkl')
-        Y = pd.read_pickle(data_path+'asset_'+freq+'.pkl')
+        X = pd.read_pickle('./saved_models/factor_'+freq+'.pkl')
+        Y = pd.read_pickle('./saved_models/asset_'+freq+'.pkl')
     else:
         tick_list = ['AAPL', 'MSFT', 'AMZN', 'C', 'JPM', 'BAC', 'XOM', 'HAL', 'MCD', 'WMT', 'COST', 'CAT', 'LMT', 'JNJ', 'PFE', 'DIS', 'VZ', 'T', 'ED', 'NEM']
 
@@ -251,8 +242,8 @@ def AV(start, end, split, freq='weekly', n_obs=104, use_cache=False, n_y=None):
             Y = Y.resample('W-FRI').agg(lambda x: (x + 1).prod() - 1)
             X = X.resample('W-FRI').agg(lambda x: (x + 1).prod() - 1)
 
-        X.to_pickle(data_path+'factor_'+freq+'.pkl')
-        Y.to_pickle(data_path+'asset_'+freq+'.pkl')
+        X.to_pickle('./saved_models/factor_'+freq+'.pkl')
+        Y.to_pickle('./saved_models/asset_'+freq+'.pkl')
 
     # Partition dataset into training and testing sets. Lag the data by one observation
     return TrainTest(X[:-1], n_obs, split), TrainTest(Y[1:], n_obs, split)

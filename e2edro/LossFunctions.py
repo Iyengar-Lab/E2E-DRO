@@ -1,16 +1,9 @@
 # Financial performance loss functions for E2E learning framework
 #
-# Prepared by:    Giorgio Costa (gc2958@columbia.edu)
-#
 ####################################################################################################
 ## Import libraries
 ####################################################################################################
-import cvxpy as cp
-from cvxpylayers.torch import CvxpyLayer
 import torch
-import torch.nn as nn
-from torch.autograd import Variable
-import numpy as np
 
 ####################################################################################################
 # Performance loss functions

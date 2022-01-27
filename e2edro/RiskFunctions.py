@@ -2,8 +2,6 @@
 # 
 # This module defines the finanical risk measures to be used in the optimization layer of the E2E
 # problem.
-# 
-# Prepared by:    Giorgio Costa (gc2958@columbia.edu)
 #
 ####################################################################################################
 ## Import libraries
@@ -38,16 +36,3 @@ def p_mad(z, c, x):
     over all scenarios 'x' to recover the complete MAD
     """
     return cp.abs(x @ z - c)
-
-def p_lpm(z, b, x):
-    """Lower partial moment (LPM)
-    Inputs
-    z: (n x 1) vector of portfolio weights (decision variable)
-    b: Scalar. Benchmark or target return from which we measure downside deviation
-    x: (n x 1) vector of realized returns (data)
-
-    Output: Single squared downside deviation
-    Note: This function is only one component of the portfolio LPM, and must be aggregated 
-    over all scenarios 'x' to recover the complete LPM
-    """
-    return cp.maximum(x @ z - b, 0)**2

@@ -1,6 +1,4 @@
-# End-to-End Distributionally Robust Optimization
-#
-# Prepared by: Giorgio Costa (gc2958@columbia.edu)
+# Distributionally Robust End-to-End Portfolio Construction
 #
 ####################################################################################################
 # %% Import libraries
@@ -12,29 +10,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 plt.close("all")
 
-# Import E2E_DRO functions
-my_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL"
-
-model_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/saved_models/"
-
-import sys
-sys.path.append(my_path+"/E2E-DRO")
-from e2edro import e2edro as dro
-from e2edro import e2edro2 as dro2
-from e2edro import DataLoad as dl
-from other import PlotFunctions as pf
-from other import NaiveModel as nm
-
 # Make the code device-agnostic
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-# Imoprt 'reload' to update E2E_DRO libraries while in development
-from importlib import reload 
-reload(dro)
-reload(dro2)
-reload(dl)
-reload(pf)
-reload(nm)
+# Import E2E_DRO functions
+from e2edro import e2edro as e2e
+from e2edro import DataLoad as dl
+from e2edro import BaseModels as bm
+from e2edro import PlotFunctions as pf
+
+# Path to save the final models and results
+model_path = "./saved_models/"
 
 ####################################################################################################
 # %% Load data
@@ -67,112 +53,160 @@ perf_loss='sharpe_loss'
 perf_period = 13
 pred_loss_factor = 0.5
 prisk = 'p_var'
-opt_layer = 'hellinger'
 train_pred = True
-set_seed = 1
 
 lr_list = [0.01, 0.02, 0.03]
 epoch_list = [10, 20, 30]
-use_cache = True
+use_cache = False
+save_results = False
+
+# For numerical experiments in manuscript, initialize gamma and delta to these values
+init_params = [0.04288157820701599, 0.05563848838210106]
 
 #---------------------------------------------------------------------------------------------------
 # %% Run neural nets
 #---------------------------------------------------------------------------------------------------
+# Equal weight portfolio
+ew_net = bm.equal_weight(n_x, n_y, n_obs)
+ew_net.net_roll_test(X, Y, n_roll=4)
+
 if use_cache:
+    # Load cached models and backtest results
     with open(model_path+'nom_dro_nets_'+prisk+'_TrainPred'+str(train_pred)+'.pkl', 'rb') as inp:
         nom_net = pickle.load(inp)
-        dro_net = pickle.load(inp)
-        naive_net = pickle.load(inp)
+        dr_net = pickle.load(inp)
+
+    with open(model_path+'po_net'+'_TrainPred'+str(train_pred)+'.pkl', 'rb') as inp:
+        po_net = pickle.load(inp)
 
     with open(model_path+'basis_net'+'_TrainPred'+str(train_pred)+'.pkl', 'rb') as inp:
-        maxR_net = pickle.load(inp)
+        base_net = pickle.load(inp)
+
+    with open(model_path+'nom_dro_const'+'_TrainPred'+str(train_pred)+'.pkl', 'rb') as inp:
+        nom_net_const_gam = pickle.load(inp)
+        dr_net_const_del = pickle.load(inp)
 
 else:
-    # Nominal E2E neural net
-    nom_net = dro2.e2e(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, set_seed=set_seed,
-                        perf_loss=perf_loss, perf_period=perf_period,
-                        pred_loss_factor=pred_loss_factor).double()
-    init_gamma = nom_net.gamma.item()
+    # Nominal E2E system
+    nom_net = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                        init_params=init_params, opt_layer='nominal', perf_loss=perf_loss, 
+                        perf_period=perf_period, pred_loss_factor=pred_loss_factor).double()
     nom_net.net_cv(X, Y, lr_list, epoch_list)
     nom_net.net_roll_test(X, Y, n_roll=4)
 
-    # DRO E2E DRO neural net
-    dro_net = dro2.e2e(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, set_seed=set_seed,
-                        opt_layer=opt_layer, perf_loss=perf_loss, perf_period=perf_period,
-                        pred_loss_factor=pred_loss_factor).double()
-    dro_net.net_cv(X, Y, lr_list, epoch_list)
-    dro_net.net_roll_test(X, Y, n_roll=4)
+    # DR E2E system
+    dr_net = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                        init_params=init_params, opt_layer='hellinger', perf_loss=perf_loss, 
+                        perf_period=perf_period, pred_loss_factor=pred_loss_factor).double()
+    dr_net.net_cv(X, Y, lr_list, epoch_list)
+    dr_net.net_roll_test(X, Y, n_roll=4)
 
-    # Naive predict-then-optimize model
-    naive_net = nm.pred_then_opt(n_x, n_y, n_obs, gamma=init_gamma, prisk=prisk).double()
-    naive_net.net_roll_test(X, Y, n_roll=4)
+    # Predict-then-optimize system
+    po_net = bm.pred_then_opt(n_x, n_y, n_obs, gamma=init_params[0], prisk=prisk).double()
+    po_net.net_roll_test(X, Y, n_roll=4)
 
-    # Basis E2E neural net
-    maxR_net = dro2.e2e(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, set_seed=set_seed,
-                        opt_layer='max_ret', perf_loss=perf_loss, perf_period=perf_period,
-                        pred_loss_factor=pred_loss_factor).double()
-    maxR_net.net_cv(X, Y, lr_list, epoch_list)
-    maxR_net.net_roll_test(X, Y, n_roll=4)
+    # Base E2E neural net
+    base_net = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                        init_params=init_params, opt_layer='base_mod', perf_loss=perf_loss, 
+                        perf_period=perf_period, pred_loss_factor=pred_loss_factor).double()
+    base_net.net_cv(X, Y, lr_list, epoch_list)
+    base_net.net_roll_test(X, Y, n_roll=4)
 
-    with open(model_path+'nom_dro_nets_'+prisk+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
-        pickle.dump(nom_net, outp, pickle.HIGHEST_PROTOCOL)
-        pickle.dump(dro_net, outp, pickle.HIGHEST_PROTOCOL)
-        pickle.dump(naive_net, outp, pickle.HIGHEST_PROTOCOL)
+    # Nominal E2E system with fixed gamma
+    nom_net_const_gam = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                            init_params=init_params, perf_loss=perf_loss, perf_period=perf_period, 
+                            train_gamma=False, pred_loss_factor=pred_loss_factor).double()
+    nom_net_const_gam.net_cv(X, Y, lr_list, epoch_list)
+    nom_net_const_gam.net_roll_test(X, Y, n_roll=4)
 
-    with open(model_path+'basis_net'+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
-        pickle.dump(maxR_net, outp, pickle.HIGHEST_PROTOCOL)
+    # DR E2E system with fixed delta
+    dr_net_const_del = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                        init_params=init_params, opt_layer='hellinger', perf_loss=perf_loss, 
+                        perf_period=perf_period, pred_loss_factor=pred_loss_factor, 
+                        train_delta=False).double()
+    dr_net_const_del.net_cv(X, Y, lr_list, epoch_list)
+    dr_net_const_del.net_roll_test(X, Y, n_roll=4)
 
-ew_net = nm.equal_weight(n_x, n_y, n_obs)
-ew_net.net_roll_test(X, Y, n_roll=4)
+    if save_results:
+        with open(model_path+'nom_dro_nets_'+prisk+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
+            pickle.dump(nom_net, outp, pickle.HIGHEST_PROTOCOL)
+            pickle.dump(dr_net, outp, pickle.HIGHEST_PROTOCOL)
+
+        with open(model_path+'po_net'+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
+            pickle.dump(po_net, outp, pickle.HIGHEST_PROTOCOL)
+
+        with open(model_path+'basis_net'+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
+            pickle.dump(base_net, outp, pickle.HIGHEST_PROTOCOL)
+
+        with open(model_path+'nom_dro_const'+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
+            pickle.dump(nom_net_const_gam, outp, pickle.HIGHEST_PROTOCOL)
+            pickle.dump(dr_net_const_del, outp, pickle.HIGHEST_PROTOCOL)
 
 ####################################################################################################
 # %% Plots
 ####################################################################################################
 
+#---------------------------------------------------------------------------------------------------
+# %% NUmerical results
+#---------------------------------------------------------------------------------------------------
 # Validation results table
-pd.concat((nom_net.cv_results.round(3), dro_net.cv_results.val_loss.round(3), 
-            maxR_net.cv_results.val_loss.round(3)), axis=1).to_latex()
+validation_table = pd.concat((base_net.cv_results.round(3), nom_net.cv_results.val_loss.round(3), 
+                                dr_net.cv_results.val_loss.round(3)), axis=1)
+validation_table.set_axis(['eta', 'Epochs', 'Base', 'Nom.', 'DR'], axis=1, inplace=True) 
 
 # Out-of-sample summary statistics table
+portfolios = ["ew_net", "po_net", "base_net", "nom_net", "dr_net"]
+rets =[]
+vols = []
+SRs = []
+for portfolio in portfolios:
+    ret = (eval(portfolio).portfolio.rets.tri[-1] ** 
+            (1/eval(portfolio).portfolio.rets.tri.shape[0]))**52 - 1
+    vol = eval(portfolio).portfolio.vol * np.sqrt(52)
+    SR = ret / vol
+    rets.append(round(ret*100, ndigits=1))
+    vols.append(round(vol*100, ndigits=1))
+    SRs.append(round(SR, ndigits=2))
 
+fin_table = pd.DataFrame(np.array([rets, vols, SRs]), columns=['EW', 'PO', 'Base', 'Nom.', 'DR'])
 
-
-reload(pf)
-#---------------------------------------------------------------------------------------------------
 # Wealth evolution plot
+portfolio_names = ["Equal Weight", "Pred.-then-Opt.", "Base E2E", "Nom. E2E", "DR E2E"]
+portfolio_list = [ew_net.portfolio, po_net.portfolio, base_net.portfolio, nom_net.portfolio, 
+                    dr_net.portfolio]
+portfolio_colors = ["dimgray", "goldenrod", "forestgreen", "dodgerblue", "salmon"]
+pf.wealth_plot(portfolio_list, portfolio_names, portfolio_colors, path="./plots/wealth.pdf")
+
 #---------------------------------------------------------------------------------------------------
-pf.wealth_plot(nom_net.portfolio, dro_net.portfolio, naive_net.portfolio, path=my_path+"/plots/wealth.pdf")
+# %% Appendix: numerical results
+#---------------------------------------------------------------------------------------------------
+# Appendix: Validation results table
+val_table_app = pd.concat((nom_net_const_gam.cv_results.round(3), 
+                            dr_net_const_del.cv_results.val_loss.round(3)), axis=1)
+val_table_app.set_axis(['eta', 'Epochs', 'Nom_const_gam', 'DR_const_del'], axis=1, inplace=True) 
 
-pf.wealth_plot(nom_net.portfolio, dro_net.portfolio, naive_net.portfolio, maxR_net.portfolio, 
-                ew_net.portfolio, path=my_path+"/plots/wealth.pdf")
+# Appendix: Out-of-sample summary statistics table
+portfolios = ["nom_net", "nom_net_const_gam", "dr_net", "dr_net_const_del"]
+rets =[]
+vols = []
+SRs = []
+for portfolio in portfolios:
+    ret = (eval(portfolio).portfolio.rets.tri[-1] ** 
+            (1/eval(portfolio).portfolio.rets.tri.shape[0]))**52 - 1
+    vol = eval(portfolio).portfolio.vol * np.sqrt(52)
+    SR = ret / vol
+    rets.append(round(ret*100, ndigits=1))
+    vols.append(round(vol*100, ndigits=1))
+    SRs.append(round(SR, ndigits=2))
 
+fin_table_app = pd.DataFrame(np.array([rets, vols, SRs]), columns=['cons_gamma', 'Nom.', 'cons_delta', 'DR'])
+fin_table_app.set_axis(['Return (%)', 'Volatility (%)', 'Sharpe ratio'], axis=0, inplace=True) 
 
+# Appendix: Wealth evolution plot
+portfolio_names = ["Nom. E2E", "Nom. E2E (const. gamma)", "DR E2E", "DR E2E (const. delta)"]
+portfolio_list = [nom_net.portfolio, nom_net_const_gam.portfolio, dr_net.portfolio, 
+                    dr_net_const_del.portfolio]
+portfolio_colors = ["dodgerblue", "mediumblue", "salmon", "firebrick"]
+pf.wealth_plot(portfolio_list, portfolio_names, portfolio_colors, 
+                path="./plots/wealth_app.pdf")
 
-# reload(pf)
-# #---------------------------------------------------------------------------------------------------
-# # Loss plots
-# #---------------------------------------------------------------------------------------------------
-# pf.loss_plot_multiple(nom_results[:5], dro_results[:5], path=my_path+"/plots/loss_multi_1.pdf")
-# pf.loss_plot_multiple(nom_results[5:], dro_results[5:], path=my_path+"/plots/loss_multi_2.pdf")
-
-# pf.loss_plot_multiple(nom_results, dro_results, path=my_path+"/plots/loss_multi.pdf")
-
-# reload(pf)
-# #---------------------------------------------------------------------------------------------------
-# # Gamma and delta plots
-# #---------------------------------------------------------------------------------------------------
-# pf.gamma_plot_multiple(nom_results[:5], dro_results[:5], path=my_path+"/plots/gamma_multi_1.pdf")
-# pf.gamma_plot_multiple(nom_results[5:], dro_results[5:], path=my_path+"/plots/gamma_multi_2.pdf")
-
-# pf.gamma_plot_multiple(nom_results, dro_results, path=my_path+"/plots/gamma_multi.pdf")
-
-# reload(pf)
-# #---------------------------------------------------------------------------------------------------
-# # Wealth evolution plots
-# #---------------------------------------------------------------------------------------------------
-# pf.wealth_plot_multiple(nom_p_best[:5], dro_p_best[:5], path=my_path+"/plots/wealth_multi_1.pdf")
-# pf.wealth_plot_multiple(nom_p_best[5:], dro_p_best[5:], path=my_path+"/plots/wealth_multi_2.pdf")
-
-# pf.wealth_plot_multiple(nom_p_best, dro_p_best, path=my_path+"/plots/wealth_multi.pdf")
-
-# pf.wealth_plot_multiple(nom_p_best, dro_p_best)

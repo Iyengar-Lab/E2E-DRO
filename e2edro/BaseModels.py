@@ -1,30 +1,17 @@
 # Naive Model Module
 #
-# Prepared by: Giorgio Costa (gc2958@columbia.edu)
-#
 ####################################################################################################
 ## Import libraries
 ####################################################################################################
 import numpy as np
-import cvxpy as cp
-from cvxpylayers.torch import CvxpyLayer
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.autograd import Variable
 
-my_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL"
-import sys
-sys.path.append(my_path+"/E2E-DRO")
-
 import e2edro.RiskFunctions as rf
 import e2edro.PortfolioClasses as pc
-import e2edro.e2edro2 as e2e
-
-from importlib import reload 
-reload(pc)
-
-model_path = "/Users/giorgio/Library/Mobile Documents/com~apple~CloudDocs/Documents/Google Drive/Research Projects/2021/E2E DRL/saved_models/"
+import e2edro.e2edro as e2e
 
 ####################################################################################################
 # Naive 'predict-then-optimize'
@@ -104,8 +91,16 @@ class pred_then_opt(nn.Module):
     #-----------------------------------------------------------------------------------------------
     # net_test: Test the e2e neural net
     #-----------------------------------------------------------------------------------------------
-    def net_roll_test(self, X, Y, n_roll=5):
+    def net_roll_test(self, X, Y, n_roll=4):
         """Neural net rolling window out-of-sample test
+
+        Inputs
+        X: Features. ([n_obs+1] x n_x) torch tensor with feature timeseries data
+        Y: Realizations. (n_obs x n_y) torch tensor with asset timeseries data
+        n_roll: Number of training periods (i.e., number of times to retrain the model)
+
+        Output 
+        self.portfolio: add the backtest results to the e2e_net object
         """
 
         # Declare backtest object to hold the test results
@@ -168,7 +163,7 @@ class pred_then_opt(nn.Module):
         self.portfolio = portfolio
 
 ####################################################################################################
-# Naive 'predict-then-optimize'
+# Equal weight
 ####################################################################################################
 class equal_weight:
     """Naive 'equally-weighted' portfolio construction module
@@ -190,8 +185,16 @@ class equal_weight:
     #-----------------------------------------------------------------------------------------------
     # net_test: Test the e2e neural net
     #-----------------------------------------------------------------------------------------------
-    def net_roll_test(self, X, Y, n_roll=5):
+    def net_roll_test(self, X, Y, n_roll=4):
         """Neural net rolling window out-of-sample test
+
+        Inputs
+        X: Features. ([n_obs+1] x n_x) torch tensor with feature timeseries data
+        Y: Realizations. (n_obs x n_y) torch tensor with asset timeseries data
+        n_roll: Number of training periods (i.e., number of times to retrain the model)
+
+        Output 
+        self.portfolio: add the backtest results to the e2e_net object
         """
 
         # Declare backtest object to hold the test results
@@ -211,3 +214,114 @@ class equal_weight:
         portfolio.stats()
 
         self.portfolio = portfolio
+
+####################################################################################################
+# Find gamma range
+####################################################################################################
+class gamma_range(nn.Module):
+    """Simple way to approximately determine the appropriate values of gamma
+    """
+    def __init__(self, n_x, n_y, n_obs):
+        """Naive 'predict-then-optimize' portfolio construction module
+
+        This NN module implements a linear prediction layer 'pred_layer' and an optimization layer 
+        'opt_layer'. The model is 'naive' since it optimizes each layer separately. 
+
+        Inputs
+        n_x: Number of inputs (i.e., features) in the prediction model
+        n_y: Number of outputs from the prediction model
+        n_obs: Number of scenarios from which to calculate the sample set of residuals
+        prisk: String. Portfolio risk function. Used in the opt_layer
+        
+        Output
+        pred_then_opt: nn.Module object 
+        """
+        super(gamma_range, self).__init__()
+
+        self.n_x = n_x
+        self.n_y = n_y
+        self.n_obs = n_obs
+
+        # LAYER: OLS linear prediction
+        self.pred_layer = nn.Linear(n_x, n_y)
+        self.pred_layer.weight.requires_grad = False
+        self.pred_layer.bias.requires_grad = False
+
+    #-----------------------------------------------------------------------------------------------
+    # forward: forward pass of the e2e neural net
+    #-----------------------------------------------------------------------------------------------
+    def forward(self, X, Y):
+        """Forward pass of the predict-then-optimize module
+
+        The inputs 'X' are passed through the prediction layer to yield predictions 'Y_hat'. The
+        residuals from prediction are then calcuclated as 'ep = Y - Y_hat'. Finally, the residuals
+        are passed to the optimization layer to find the optimal decision z_star.
+
+        Inputs
+        X: Features. ([n_obs+1] x n_x) torch tensor with feature timeseries data
+        Y: Realizations. (n_obs x n_y) torch tensor with asset timeseries data
+
+        Other 
+        ep: Residuals. (n_obs x n_y) matrix of the residual between realizations and predictions
+
+        Outputs
+        y_hat: Prediction. (n_y x 1) vector of outputs of the prediction layer
+        z_star: Optimal solution. (n_y x 1) vector of asset weights
+        """
+        # Predict y_hat from x
+        Y_hat = torch.stack([self.pred_layer(x_t) for x_t in X])
+
+        # Calculate residuals and process them
+        ep = Y - Y_hat[:-1]
+        cov_ep = torch.cov(ep.T)
+
+        # Find prediction
+        y_hat = Y_hat[-1]
+
+        # Set z=1/n per scenario
+        z_star = torch.ones(self.n_y, dtype=torch.double) / self.n_y
+
+        gamma = ((z_star.T @ cov_ep) @ z_star) / torch.abs(y_hat @ z_star)
+
+        return gamma
+
+    #-----------------------------------------------------------------------------------------------
+    # gamma_eval: Find the range of gamma
+    #-----------------------------------------------------------------------------------------------
+    def gamma_eval(self, X, Y):
+        """Use the equal weight portfolio and the nominal distribution to find appropriate
+        values of gamma. 
+
+        Inputs
+        X: Features. ([n_obs+1] x n_x) torch tensor with feature timeseries data
+        Y: Realizations. (n_obs x n_y) torch tensor with asset timeseries data
+
+        Output
+        gamma: estimated gamma valules for each observation in the training set
+        """
+
+        # Initialize the prediction layer weights to OLS regression weights
+        X_train, Y_train = X.train(), Y.train()
+        X_train.insert(0,'ones', 1.0)
+
+        X_train = Variable(torch.tensor(X_train.values, dtype=torch.double))
+        Y_train = Variable(torch.tensor(Y_train.values, dtype=torch.double))
+    
+        Theta = torch.inverse(X_train.T @ X_train) @ (X_train.T @ Y_train)
+        Theta = Theta.T
+        del X_train, Y_train
+
+        with torch.no_grad():
+            self.pred_layer.bias.copy_(Theta[:,0])
+            self.pred_layer.weight.copy_(Theta[:,1:])
+
+       # Construct training and validation DataLoader objects
+        train_set = DataLoader(pc.SlidingWindow(X.train(), Y.train(), self.n_obs, 0))
+
+        # Test model
+        with torch.no_grad():
+            gamma = []
+            for t, (x, y, y_perf) in enumerate(train_set):
+                gamma.append(self(x.squeeze(),y.squeeze()))
+
+        return gamma
