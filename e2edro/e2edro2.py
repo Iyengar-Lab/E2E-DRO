@@ -263,7 +263,7 @@ def hellinger(n_y, n_obs, prisk):
 ####################################################################################################
 # DRO neural network module
 ####################################################################################################
-class e2e_net(nn.Module):
+class e2e(nn.Module):
     """End-to-end DRO learning neural net module.
     """
     def __init__(self, n_x, n_y, n_obs, opt_layer='nominal', prisk='p_var', perf_loss='sharpe_loss',
@@ -289,9 +289,11 @@ class e2e_net(nn.Module):
         set_seed: Random seed to use for reproducibility
 
         Output
-        e2e_net: nn.Module object 
+        e2e: nn.Module object 
         """
-        super(e2e_net, self).__init__()
+        super(e2e, self).__init__()
+
+        torch.manual_seed(5)
 
         self.n_x = n_x
         self.n_y = n_y

@@ -285,8 +285,10 @@ class e2e_net(nn.Module):
         pred_loss_factor: Trade-off between prediction loss function and performance loss function.
             Set 'pred_loss_factor=None' to define the loss function purely as 'perf_loss'
         perf_period: Number of lookahead realizations used in 'perf_loss()'
-        train_pred: Boolean. Determine whether to train the prediction layer (or keep it fixed)
-        set_seed: Random seed to use for reproducibility
+        train_pred: Boolean. Choose if the prediction layer is learnable (or keep it fixed)
+        init_params: (Optional) List with 2 Float elements. Initial gamma and delta parameters
+        train_gamma: Boolean. Choose if the risk appetite parameter gamma is learnable
+        train_delta: Boolean. Choose if the robustness parameter delta is learnable
 
         Output
         e2e_net: nn.Module object 
@@ -312,8 +314,7 @@ class e2e_net(nn.Module):
 
         # Register 'gamma' (risk-return trade-off parameter)
         if init_params is None:
-            # self.gamma = nn.Parameter(torch.FloatTensor(1).uniform_(0.037, 0.173))
-            self.gamma = nn.Parameter(torch.rand(1)/20 + 0.005)
+            self.gamma = nn.Parameter(torch.FloatTensor(1).uniform_(0.037, 0.173))
         else:
             self.gamma = nn.Parameter(torch.tensor(init_params[0]))
         self.gamma.requires_grad = train_gamma
@@ -335,15 +336,14 @@ class e2e_net(nn.Module):
         else:
             # Register 'delta' (ambiguity sizing parameter) for DRO model
             if init_params is None:
-                # self.delta = nn.Parameter(torch.FloatTensor(1).uniform_(0.005, 0.18))
-                self.delta = nn.Parameter(torch.rand(1)/15 + 0.025)
+                self.delta = nn.Parameter(torch.FloatTensor(1).uniform_(0.005, 0.18))
             else:
                 self.delta = nn.Parameter(torch.tensor(init_params[1]))
             self.delta.requires_grad = train_delta
             self.model_type = 'dro'
 
         # Store initial model
-        torch.save(self.state_dict(), './saved_models/'+self.model_type+'_initial_state')
+        torch.save(self.state_dict(), './cache/'+self.model_type+'_initial_state')
 
     #-----------------------------------------------------------------------------------------------
     # forward: forward pass of the e2e neural net
@@ -481,9 +481,9 @@ class e2e_net(nn.Module):
         # If val_set is None, then save the parameters of the fully trained model
         else:
             if self.model_type == 'nom':
-                torch.save(self.state_dict(), './saved_models/nom_net_full')
+                torch.save(self.state_dict(), './cache/nom_net_full')
             elif self.model_type == 'dro':
-                torch.save(self.state_dict(), './saved_models/dro_net_full')
+                torch.save(self.state_dict(), './cache/dro_net_full')
             print("Trained model saved")
 
     #-----------------------------------------------------------------------------------------------
@@ -533,7 +533,7 @@ class e2e_net(nn.Module):
                                                             self.n_obs, self.perf_period))
 
                     # Reset learnable parameters gamma and delta
-                    self.load_state_dict(torch.load('./saved_models/'+self.model_type+'_initial_state'))
+                    self.load_state_dict(torch.load('./cache/'+self.model_type+'_initial_state'))
 
                     # Initialize the prediction layer weights to OLS regression weights
                     X_train, Y_train = X_temp.train(), Y_temp.train()
@@ -563,7 +563,7 @@ class e2e_net(nn.Module):
 
         # Convert results to dataframe
         self.cv_results = results.df()
-        self.cv_results.to_pickle('./saved_models/'+self.model_type+'_results.pkl')
+        self.cv_results.to_pickle('./cache/'+self.model_type+'_results.pkl')
 
         # Select and store the optimal hyperparameters
         idx = self.cv_results.val_loss.idxmin()
@@ -622,7 +622,7 @@ class e2e_net(nn.Module):
             test_set = DataLoader(pc.SlidingWindow(X.test(), Y.test(), self.n_obs, 0))
 
             # Reset learnable parameters gamma and delta
-            self.load_state_dict(torch.load('./saved_models/'+self.model_type+'_initial_state'))
+            self.load_state_dict(torch.load('./cache/'+self.model_type+'_initial_state'))
 
             # Initialize the prediction layer weights to OLS regression weights
             X_train, Y_train = X.train(), Y.train()

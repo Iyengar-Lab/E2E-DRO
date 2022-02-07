@@ -3,10 +3,11 @@
 ####################################################################################################
 # %% Import libraries
 ####################################################################################################
-import pickle
+from tkinter.tix import Tree
 import torch
 import pandas as pd
 import numpy as np
+import pickle
 import matplotlib.pyplot as plt
 plt.close("all")
 
@@ -19,19 +20,17 @@ from e2edro import DataLoad as dl
 from e2edro import BaseModels as bm
 from e2edro import PlotFunctions as pf
 
-
-from e2edro import e2edro2 as dro
-from other import NaiveModel as nm
-
-# Path to save the final models and results
-model_path = "./saved_models/"
-
-from importlib import reload
-reload(e2e)
+# Path to cache the data, models and results
+cache_path = "./cache/"
 
 ####################################################################################################
 # %% Load data
 ####################################################################################################
+# AlphaVantage API Key. 
+# Note: User API keys can be obtained for free from www.alphavantage.co. Users will need a free 
+# academic or paid license to donwload adjusted closing pricing data from AlphaVantage.
+AV_key = None
+
 # Data frequency and start/end dates
 freq = 'weekly'
 start = '2000-01-01'
@@ -46,8 +45,9 @@ n_obs = 104
 # Number of assets
 n_y = 20
 
-# Load data
-X, Y = dl.AV(start, end, split, freq=freq, n_obs=n_obs, use_cache=True, n_y=n_y)
+# Download data (or load cached data)
+X, Y = dl.AV(start, end, split, freq=freq, n_obs=n_obs, n_y=n_y, use_cache=True,
+            save_results=False, AV_key=AV_key)
 
 # Number of features and assets
 n_x, n_y = X.data.shape[1], Y.data.shape[1]
@@ -55,16 +55,31 @@ n_x, n_y = X.data.shape[1], Y.data.shape[1]
 ####################################################################################################
 # %% Neural net training and testing
 ####################################################################################################
-# Evaluation metrics
+# INITIALIZE PARAMETERS
+
+# Performance loss function and performance period 'v+1'
 perf_loss='sharpe_loss'
 perf_period = 13
+
+# Weight assigned to MSE prediction loss function
 pred_loss_factor = 0.5
+
+# Risk function (default set to variance)
 prisk = 'p_var'
+
+# Determine whether to train the prediction weights Theta (default is True for E2E models)
 train_pred = True
 
+# List of learning rates to test
 lr_list = [0.01, 0.02, 0.03]
+
+# List of total no. of epochs to test
 epoch_list = [10, 20, 30]
+
+# Load saved models (default is False)
 use_cache = False
+
+# Cache model results (default is False)
 save_results = False
 
 # For numerical experiments in manuscript, initialize gamma and delta to these values
@@ -73,23 +88,15 @@ init_params = [0.04288157820701599, 0.05563848838210106]
 #---------------------------------------------------------------------------------------------------
 # %% Run neural nets
 #---------------------------------------------------------------------------------------------------
-# Equal weight portfolio
-ew_net = bm.equal_weight(n_x, n_y, n_obs)
-ew_net.net_roll_test(X, Y, n_roll=4)
 
 if use_cache:
     # Load cached models and backtest results
-    with open(model_path+'nom_dro_nets_'+prisk+'_TrainPred'+str(train_pred)+'.pkl', 'rb') as inp:
+    with open(cache_path+'cached_models.pkl', 'rb') as inp:
         nom_net = pickle.load(inp)
         dr_net = pickle.load(inp)
-
-    with open(model_path+'po_net'+'_TrainPred'+str(train_pred)+'.pkl', 'rb') as inp:
         po_net = pickle.load(inp)
-
-    with open(model_path+'basis_net'+'_TrainPred'+str(train_pred)+'.pkl', 'rb') as inp:
         base_net = pickle.load(inp)
-
-    with open(model_path+'nom_dro_const'+'_TrainPred'+str(train_pred)+'.pkl', 'rb') as inp:
+        ew_net = pickle.load(inp)
         nom_net_const_gam = pickle.load(inp)
         dr_net_const_del = pickle.load(inp)
 
@@ -119,11 +126,14 @@ else:
     base_net.net_cv(X, Y, lr_list, epoch_list)
     base_net.net_roll_test(X, Y, n_roll=4)
 
+    # Equal weight portfolio
+    ew_net = bm.equal_weight(n_x, n_y, n_obs)
+    ew_net.net_roll_test(X, Y, n_roll=4)
+
     # Nominal E2E system with fixed gamma
     nom_net_const_gam = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
-                            init_params=init_params, opt_layer='nominal', perf_loss=perf_loss, 
-                            perf_period=perf_period, pred_loss_factor=pred_loss_factor, 
-                            train_gamma=False).double()
+                        init_params=init_params, opt_layer='nominal', perf_loss=perf_loss,
+                        perf_period=perf_period, pred_loss_factor=pred_loss_factor, train_gamma=False).double()
     nom_net_const_gam.net_cv(X, Y, lr_list, epoch_list)
     nom_net_const_gam.net_roll_test(X, Y, n_roll=4)
 
@@ -136,17 +146,12 @@ else:
     dr_net_const_del.net_roll_test(X, Y, n_roll=4)
 
     if save_results:
-        with open(model_path+'nom_dro_nets_'+prisk+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
+        with open(cache_path+'cached_models.pkl', 'wb') as outp:
             pickle.dump(nom_net, outp, pickle.HIGHEST_PROTOCOL)
             pickle.dump(dr_net, outp, pickle.HIGHEST_PROTOCOL)
-
-        with open(model_path+'po_net'+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
             pickle.dump(po_net, outp, pickle.HIGHEST_PROTOCOL)
-
-        with open(model_path+'basis_net'+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
             pickle.dump(base_net, outp, pickle.HIGHEST_PROTOCOL)
-
-        with open(model_path+'nom_dro_const'+'_TrainPred'+str(train_pred)+'.pkl', 'wb') as outp:
+            pickle.dump(ew_net, outp, pickle.HIGHEST_PROTOCOL)
             pickle.dump(nom_net_const_gam, outp, pickle.HIGHEST_PROTOCOL)
             pickle.dump(dr_net_const_del, outp, pickle.HIGHEST_PROTOCOL)
 
@@ -159,7 +164,7 @@ else:
 #---------------------------------------------------------------------------------------------------
 # Validation results table
 validation_table = pd.concat((base_net.cv_results.round(3), nom_net.cv_results.val_loss.round(3), 
-                                dr_net.cv_results.val_loss.round(3)), axis=1)
+                            dr_net.cv_results.val_loss.round(3)), axis=1)
 validation_table.set_axis(['eta', 'Epochs', 'Base', 'Nom.', 'DR'], axis=1, inplace=True) 
 
 # Out-of-sample summary statistics table
@@ -217,3 +222,4 @@ portfolio_list = [nom_net.portfolio, nom_net_const_gam.portfolio, dr_net.portfol
 portfolio_colors = ["dodgerblue", "mediumblue", "salmon", "firebrick"]
 pf.wealth_plot(portfolio_list, portfolio_names, portfolio_colors, 
                 path="./plots/wealth_app.pdf")
+
