@@ -16,6 +16,12 @@ import e2edro.LossFunctions as lf
 import e2edro.PortfolioClasses as pc
 import e2edro.DataLoad as dl
 
+import psutil
+num_cores = psutil.cpu_count()
+torch.set_num_threads(num_cores)
+if psutil.MACOS:
+    num_cores = 0
+
 ####################################################################################################
 # CvxpyLayers: Differentiable optimization layers (nominal and distributionally robust)
 ####################################################################################################
@@ -23,7 +29,7 @@ import e2edro.DataLoad as dl
 # base_mod: CvxpyLayer that declares the portfolio optimization problem
 #---------------------------------------------------------------------------------------------------
 def base_mod(n_y, n_obs, prisk):
-    """Nominal optimization problem declared as a CvxpyLayer object
+    """Base optimization problem declared as a CvxpyLayer object
 
     Inputs
     n_y: number of assets
@@ -153,7 +159,7 @@ def tv(n_y, n_obs, prisk):
     (2013).
 
     Objective
-    Minimize eta_aux + delta * lambda_aux + (1/n_obs) * sum(obj_aux) - gamma * y_hat @ z
+    Minimize eta_aux + delta * lambda_aux + (1/n_obs) * sum(beta_aux) - gamma * y_hat @ z
     """
 
     # Variables
@@ -161,7 +167,7 @@ def tv(n_y, n_obs, prisk):
     c_aux = cp.Variable()
     lambda_aux = cp.Variable(nonneg=True)
     eta_aux = cp.Variable()
-    obj_aux = cp.Variable(n_obs)
+    beta_aux = cp.Variable(n_obs)
     mu_aux = cp.Variable()
 
     # Parameters
@@ -172,14 +178,14 @@ def tv(n_y, n_obs, prisk):
     
     # Constraints
     constraints = [cp.sum(z) == 1,
-                obj_aux >= -lambda_aux,
+                beta_aux >= -lambda_aux,
                 mu_aux == y_hat @ z]
     for i in range(n_obs):
-        constraints += [obj_aux[i] >= prisk(z, c_aux, ep[i]) - eta_aux]
-        constraints += [prisk(z, c_aux, ep[i]) - eta_aux <= lambda_aux]
+        constraints += [beta_aux[i] >= prisk(z, c_aux, ep[i]) - eta_aux]
+        constraints += [lambda_aux >= prisk(z, c_aux, ep[i]) - eta_aux]
 
     # Objective function
-    objective = cp.Minimize(eta_aux + delta * lambda_aux + (1/n_obs) * cp.sum(obj_aux)
+    objective = cp.Minimize(eta_aux + delta * lambda_aux + (1/n_obs) * cp.sum(beta_aux)
                             - gamma * mu_aux)
 
     # Construct optimization problem and differentiable layer
@@ -204,9 +210,9 @@ def hellinger(n_y, n_obs, prisk):
     z: Decision variable. (n_y x 1) vector of decision variables (e.g., portfolio weights)
     c_aux: Auxiliary Variable. Scalar. Allows us to p-linearize the derivation of the variance
     lambda_aux: Auxiliary Variable. Scalar. Allows for a tractable DR counterpart.
-    eta_aux: Auxiliary Variable. Scalar. Allows for a tractable DR counterpart.
-    obj_aux: Auxiliary Variable. (n_obs x 1) vector. Allows for a tractable DR counterpart.
-    const_aux: Auxiliary Variable. (n_obs x 1) vector. Allows for a tractable SOC constraint.
+    xi_aux: Auxiliary Variable. Scalar. Allows for a tractable DR counterpart.
+    beta_aux: Auxiliary Variable. (n_obs x 1) vector. Allows for a tractable DR counterpart.
+    s_aux: Auxiliary Variable. (n_obs x 1) vector. Allows for a tractable SOC constraint.
     mu_aux: Auxiliary Variable. Scalar. Represents the portfolio conditional expected return.
 
     Parameters
@@ -223,16 +229,16 @@ def hellinger(n_y, n_obs, prisk):
     (2013).
 
     Objective
-    Minimize eta_aux + delta * lambda_aux + (1/n_obs) * sum(obj_aux) - gamma * y_hat @ z
+    Minimize xi_aux + (delta-1) * lambda_aux + (1/n_obs) * sum(beta_aux) - gamma * y_hat @ z
     """
 
     # Variables
     z = cp.Variable((n_y,1), nonneg=True)
     c_aux = cp.Variable()
     lambda_aux = cp.Variable(nonneg=True)
-    eta_aux = cp.Variable()
-    obj_aux = cp.Variable(n_obs)
-    const_aux = cp.Variable(n_obs)
+    xi_aux = cp.Variable()
+    beta_aux = cp.Variable(n_obs, nonneg=True)
+    tau_aux = cp.Variable(n_obs, nonneg=True)
     mu_aux = cp.Variable()
 
     # Parameters
@@ -245,14 +251,11 @@ def hellinger(n_y, n_obs, prisk):
     constraints = [cp.sum(z) == 1,
                 mu_aux == y_hat @ z]
     for i in range(n_obs):
-        constraints += [const_aux[i] >= 0.5 * (obj_aux[i] - lambda_aux + prisk(z, c_aux, ep[i]) 
-                        - eta_aux)]
-        constraints += [0.5 * (obj_aux[i] + lambda_aux - prisk(z, c_aux, ep[i]) + eta_aux) >=
-                        cp.norm(cp.vstack([lambda_aux, const_aux[i]]))]
-        constraints += [prisk(z, c_aux, ep[i]) - eta_aux <= lambda_aux]
+        constraints += [xi_aux + lambda_aux >= prisk(z, c_aux, ep[i]) + tau_aux[i]]
+        constraints += [beta_aux[i] >= cp.quad_over_lin(lambda_aux, tau_aux[i])]
     
     # Objective function
-    objective = cp.Minimize(eta_aux + (delta-1) * lambda_aux + (1/n_obs) * cp.sum(obj_aux) 
+    objective = cp.Minimize(xi_aux + (delta-1) * lambda_aux + (1/n_obs) * cp.sum(beta_aux) 
                             - gamma * mu_aux)
 
     # Construct optimization problem and differentiable layer
@@ -261,14 +264,13 @@ def hellinger(n_y, n_obs, prisk):
     return CvxpyLayer(problem, parameters=[ep, y_hat, gamma, delta], variables=[z])
 
 ####################################################################################################
-# DRO neural network module
+# E2E neural network module
 ####################################################################################################
 class e2e_net(nn.Module):
     """End-to-end DRO learning neural net module.
     """
     def __init__(self, n_x, n_y, n_obs, opt_layer='nominal', prisk='p_var', perf_loss='sharpe_loss',
-                pred_loss_factor=0.5, perf_period=12, train_pred=True, init_params=None,
-                train_gamma=True, train_delta=True):
+                pred_model='linear', pred_loss_factor=0.5, perf_period=13, train_pred=True, train_gamma=True, train_delta=True, set_seed=None, cache_path='./cache/'):
         """End-to-end learning neural net module
 
         This NN module implements a linear prediction layer 'pred_layer' and a DRO layer 
@@ -285,13 +287,20 @@ class e2e_net(nn.Module):
         pred_loss_factor: Trade-off between prediction loss function and performance loss function.
             Set 'pred_loss_factor=None' to define the loss function purely as 'perf_loss'
         perf_period: Number of lookahead realizations used in 'perf_loss()'
-        train_pred: Boolean. Determine whether to train the prediction layer (or keep it fixed)
-        set_seed: Random seed to use for reproducibility
+        train_pred: Boolean. Choose if the prediction layer is learnable (or keep it fixed)
+        train_gamma: Boolean. Choose if the risk appetite parameter gamma is learnable
+        train_delta: Boolean. Choose if the robustness parameter delta is learnable
+        set_seed: (Optional) Int. Set the random seed for replicability
 
         Output
         e2e_net: nn.Module object 
         """
         super(e2e_net, self).__init__()
+
+        # Set random seed (to be used for replicability of numerical experiments)
+        if set_seed is not None:
+            torch.manual_seed(set_seed)
+            self.seed = set_seed
 
         self.n_x = n_x
         self.n_y = n_y
@@ -311,21 +320,10 @@ class e2e_net(nn.Module):
         self.perf_period = perf_period
 
         # Register 'gamma' (risk-return trade-off parameter)
-        if init_params is None:
-            # self.gamma = nn.Parameter(torch.FloatTensor(1).uniform_(0.037, 0.173))
-            self.gamma = nn.Parameter(torch.rand(1)/20 + 0.005)
-        else:
-            self.gamma = nn.Parameter(torch.tensor(init_params[0]))
+        self.gamma = nn.Parameter(torch.FloatTensor(1).uniform_(0.02, 0.1))
         self.gamma.requires_grad = train_gamma
+        self.gamma_init = self.gamma.item()
 
-        # LAYER: Linear prediction (initialize to pre-trained values if requested)
-        self.pred_layer = nn.Linear(n_x, n_y)
-        self.pred_layer.weight.requires_grad = train_pred
-        self.pred_layer.bias.requires_grad = train_pred
-
-        # LAYER: Optimization
-        self.opt_layer = eval(opt_layer)(n_y, n_obs, eval('rf.'+prisk))
-        
         # Record the model design: nominal, base or DRO
         if opt_layer == 'nominal':
             self.model_type = 'nom'
@@ -333,17 +331,58 @@ class e2e_net(nn.Module):
             self.gamma.requires_grad = False
             self.model_type = 'base_mod' 
         else:
-            # Register 'delta' (ambiguity sizing parameter) for DRO model
-            if init_params is None:
-                # self.delta = nn.Parameter(torch.FloatTensor(1).uniform_(0.005, 0.18))
-                self.delta = nn.Parameter(torch.rand(1)/15 + 0.025)
+            # Register 'delta' (ambiguity sizing parameter) for DR layer
+            if opt_layer == 'hellinger':
+                ub = (1 - 1/(n_obs**0.5)) / 2
+                lb = (1 - 1/(n_obs**0.5)) / 10
             else:
-                self.delta = nn.Parameter(torch.tensor(init_params[1]))
+                ub = (1 - 1/n_obs) / 2
+                lb = (1 - 1/n_obs) / 10
+            self.delta = nn.Parameter(torch.FloatTensor(1).uniform_(lb, ub))
             self.delta.requires_grad = train_delta
+            self.delta_init = self.delta.item()
             self.model_type = 'dro'
 
+        # LAYER: Prediction model
+        self.pred_model = pred_model
+        if pred_model == 'linear':
+            # Linear prediction model
+            self.pred_layer = nn.Linear(n_x, n_y)
+            self.pred_layer.weight.requires_grad = train_pred
+            self.pred_layer.bias.requires_grad = train_pred
+        elif pred_model == '2layer':
+            # Neural net with 2 hidden layers 
+            self.pred_layer = nn.Sequential(nn.Linear(n_x, int(0.5*(n_x+n_y))),
+                      nn.ReLU(),
+                      nn.Linear(int(0.5*(n_x+n_y)), n_y),
+                      nn.ReLU(),
+                      nn.Linear(n_y, n_y))
+        elif pred_model == '3layer':
+            # Neural net with 3 hidden layers 
+            self.pred_layer = nn.Sequential(nn.Linear(n_x, int(0.5*(n_x+n_y))),
+                      nn.ReLU(),
+                      nn.Linear(int(0.5*(n_x+n_y)), int(0.6*(n_x+n_y))),
+                      nn.ReLU(),
+                      nn.Linear(int(0.6*(n_x+n_y)), n_y),
+                      nn.ReLU(),
+                      nn.Linear(n_y, n_y))
+
+        # LAYER: Optimization model
+        self.opt_layer = eval(opt_layer)(n_y, n_obs, eval('rf.'+prisk))
+        
+        # Store reference path to store model data
+        self.cache_path = cache_path
+
         # Store initial model
-        torch.save(self.state_dict(), './saved_models/'+self.model_type+'_initial_state')
+        if train_gamma and train_delta:
+            self.init_state_path = cache_path + self.model_type+'_initial_state_' + pred_model
+        elif train_delta and not train_gamma:
+            self.init_state_path = cache_path + self.model_type+'_initial_state_' + pred_model+ '_TrainGamma'+str(train_gamma)
+        elif train_gamma and not train_delta:
+            self.init_state_path = cache_path + self.model_type+'_initial_state_' + pred_model+ '_TrainDelta'+str(train_delta)
+        elif not train_gamma and not train_delta:
+            self.init_state_path = cache_path + self.model_type+'_initial_state_' + pred_model+ '_TrainGamma'+str(train_gamma) + '_TrainDelta'+str(train_delta)
+        torch.save(self.state_dict(), self.init_state_path)
 
     #-----------------------------------------------------------------------------------------------
     # forward: forward pass of the e2e neural net
@@ -366,7 +405,7 @@ class e2e_net(nn.Module):
         y_hat: Prediction. (n_y x 1) vector of outputs of the prediction layer
         z_star: Optimal solution. (n_y x 1) vector of asset weights
         """
-        # Predict y_hat from x
+        # Multiple predictions Y_hat from X
         Y_hat = torch.stack([self.pred_layer(x_t) for x_t in X])
 
         # Calculate residuals and process them
@@ -381,8 +420,7 @@ class e2e_net(nn.Module):
         if self.model_type == 'nom':
             z_star, = self.opt_layer(ep, y_hat, self.gamma, solver_args=solver_args)
         elif self.model_type == 'dro':
-            z_star, = self.opt_layer(ep, y_hat, self.gamma, self.delta,
-                        solver_args=solver_args)
+            z_star, = self.opt_layer(ep, y_hat, self.gamma, self.delta, solver_args=solver_args)
         elif self.model_type == 'base_mod':
             z_star, = self.opt_layer(y_hat, solver_args=solver_args)
 
@@ -478,19 +516,11 @@ class e2e_net(nn.Module):
 
             return val_loss
 
-        # If val_set is None, then save the parameters of the fully trained model
-        else:
-            if self.model_type == 'nom':
-                torch.save(self.state_dict(), './saved_models/nom_net_full')
-            elif self.model_type == 'dro':
-                torch.save(self.state_dict(), './saved_models/dro_net_full')
-            print("Trained model saved")
-
     #-----------------------------------------------------------------------------------------------
     # net_cv: Cross validation of the e2e neural net for hyperparameter tuning
     #-----------------------------------------------------------------------------------------------
     def net_cv(self, X, Y, lr_list, epoch_list, n_val=4):
-        """Neural net training module
+        """Neural net cross-validation module
 
         Inputs
         X: Features. TrainTest object of feature timeseries data
@@ -511,18 +541,13 @@ class e2e_net(nn.Module):
                 
                 # Train the neural network
                 print('================================================')
-                if self.model_type == 'nom':
-                    print(f"Training E2E nominal model: lr={lr}, epochs={epochs}")
-                elif self.model_type == 'dro':
-                    print(f"Training E2E DR model: lr={lr}, epochs={epochs}")
-                elif self.model_type == 'base_mod':
-                    print(f"Training E2E maxR model: lr={lr}, epochs={epochs}")
-
+                print(f"Training E2E {self.model_type} model: lr={lr}, epochs={epochs}")
+                
                 val_loss_tot = []
-                for i in range(n_val):
+                for i in range(n_val-1,-1,-1):
 
                     # Partition training dataset into training and validation subset
-                    split = [0.2*(i+1), 0.2]
+                    split = [round(1-0.2*(i+1),2), 0.2]
                     X_temp.split_update(split)
                     Y_temp.split_update(split)
 
@@ -533,27 +558,28 @@ class e2e_net(nn.Module):
                                                             self.n_obs, self.perf_period))
 
                     # Reset learnable parameters gamma and delta
-                    self.load_state_dict(torch.load('./saved_models/'+self.model_type+'_initial_state'))
+                    self.load_state_dict(torch.load(self.init_state_path))
 
-                    # Initialize the prediction layer weights to OLS regression weights
-                    X_train, Y_train = X_temp.train(), Y_temp.train()
-                    X_train.insert(0,'ones', 1.0)
+                    if self.pred_model == 'linear':
+                        # Initialize the prediction layer weights to OLS regression weights
+                        X_train, Y_train = X_temp.train(), Y_temp.train()
+                        X_train.insert(0,'ones', 1.0)
 
-                    X_train = Variable(torch.tensor(X_train.values, dtype=torch.double))
-                    Y_train = Variable(torch.tensor(Y_train.values, dtype=torch.double))
-                
-                    Theta = torch.inverse(X_train.T @ X_train) @ (X_train.T @ Y_train)
-                    Theta = Theta.T
-                    del X_train, Y_train
+                        X_train = Variable(torch.tensor(X_train.values, dtype=torch.double))
+                        Y_train = Variable(torch.tensor(Y_train.values, dtype=torch.double))
+                    
+                        Theta = torch.inverse(X_train.T @ X_train) @ (X_train.T @ Y_train)
+                        Theta = Theta.T
+                        del X_train, Y_train
 
-                    with torch.no_grad():
-                        self.pred_layer.bias.copy_(Theta[:,0])
-                        self.pred_layer.weight.copy_(Theta[:,1:])
+                        with torch.no_grad():
+                            self.pred_layer.bias.copy_(Theta[:,0])
+                            self.pred_layer.weight.copy_(Theta[:,1:])
 
                     val_loss = self.net_train(train_set, val_set=val_set, lr=lr, epochs=epochs)
                     val_loss_tot.append(val_loss)
 
-                    print(f"Fold: {i+1} / {n_val}, val_loss: {val_loss}")
+                    print(f"Fold: {n_val-i} / {n_val}, val_loss: {val_loss}")
 
                 # Store results
                 results.val_loss.append(np.mean(val_loss_tot))
@@ -563,7 +589,7 @@ class e2e_net(nn.Module):
 
         # Convert results to dataframe
         self.cv_results = results.df()
-        self.cv_results.to_pickle('./saved_models/'+self.model_type+'_results.pkl')
+        self.cv_results.to_pickle(self.init_state_path+'_results.pkl')
 
         # Select and store the optimal hyperparameters
         idx = self.cv_results.val_loss.idxmin()
@@ -571,17 +597,12 @@ class e2e_net(nn.Module):
         self.epochs = self.cv_results.epochs[idx]
 
         # Print optimal parameters
-        if self.model_type == 'nom':
-            print(f"E2E nominal with optimal hyperparameters: lr={self.lr}, epochs={self.epochs}")
-        elif self.model_type == 'dro':
-            print(f"CV E2E dro with optimal hyperparameters: lr={self.lr}, epochs={self.epochs}")
-        elif self.model_type == 'base_mod':
-            print(f"CV E2E maxR with optimal hyperparameters: lr={self.lr}, epochs={self.epochs}")
+        print(f"CV E2E {self.model_type} with hyperparameters: lr={self.lr}, epochs={self.epochs}")
 
     #-----------------------------------------------------------------------------------------------
     # net_roll_test: Test the e2e neural net
     #-----------------------------------------------------------------------------------------------
-    def net_roll_test(self, X, Y, n_roll=5, lr=None, epochs=None):
+    def net_roll_test(self, X, Y, n_roll=4, lr=None, epochs=None):
         """Neural net rolling window out-of-sample test
 
         Inputs
@@ -597,6 +618,13 @@ class e2e_net(nn.Module):
 
         # Declare backtest object to hold the test results
         portfolio = pc.backtest(len(Y.test())-Y.n_obs, self.n_y, Y.test().index[Y.n_obs:])
+
+        # Store trained gamma and delta values 
+        if self.model_type == 'nom':
+            self.gamma_trained = []
+        elif self.model_type == 'dro':
+            self.gamma_trained = []
+            self.delta_trained = []
 
         # Store initial train/test split
         init_split = Y.split
@@ -621,26 +649,35 @@ class e2e_net(nn.Module):
                                                     self.perf_period))
             test_set = DataLoader(pc.SlidingWindow(X.test(), Y.test(), self.n_obs, 0))
 
+            # # Condition "i==0" added on 21-Mar-2022 
+            # if i == 0:
             # Reset learnable parameters gamma and delta
-            self.load_state_dict(torch.load('./saved_models/'+self.model_type+'_initial_state'))
+            self.load_state_dict(torch.load(self.init_state_path))
 
-            # Initialize the prediction layer weights to OLS regression weights
-            X_train, Y_train = X.train(), Y.train()
-            X_train.insert(0,'ones', 1.0)
+            if self.pred_model == 'linear':
+                # Initialize the prediction layer weights to OLS regression weights
+                X_train, Y_train = X.train(), Y.train()
+                X_train.insert(0,'ones', 1.0)
 
-            X_train = Variable(torch.tensor(X_train.values, dtype=torch.double))
-            Y_train = Variable(torch.tensor(Y_train.values, dtype=torch.double))
-        
-            Theta = torch.inverse(X_train.T @ X_train) @ (X_train.T @ Y_train)
-            Theta = Theta.T
-            del X_train, Y_train
+                X_train = Variable(torch.tensor(X_train.values, dtype=torch.double))
+                Y_train = Variable(torch.tensor(Y_train.values, dtype=torch.double))
+            
+                Theta = torch.inverse(X_train.T @ X_train) @ (X_train.T @ Y_train)
+                Theta = Theta.T
+                del X_train, Y_train
 
-            with torch.no_grad():
-                self.pred_layer.bias.copy_(Theta[:,0])
-                self.pred_layer.weight.copy_(Theta[:,1:])
+                with torch.no_grad():
+                    self.pred_layer.bias.copy_(Theta[:,0])
+                    self.pred_layer.weight.copy_(Theta[:,1:])
 
             # Train model using all available data preceding the test window
             self.net_train(train_set, lr=lr, epochs=epochs)
+
+            if self.model_type == 'nom':
+                self.gamma_trained.append(self.gamma.item())
+            elif self.model_type == 'dro':
+                self.gamma_trained.append(self.gamma.item())
+                self.delta_trained.append(self.delta.item())
 
             # Test model
             with torch.no_grad():
@@ -652,7 +689,6 @@ class e2e_net(nn.Module):
                     # Store portfolio weights and returns for each time step 't'
                     portfolio.weights[t] = z_star.squeeze()
                     portfolio.rets[t] = y_perf.squeeze() @ portfolio.weights[t]
-
                     t += 1
 
         # Reset dataset

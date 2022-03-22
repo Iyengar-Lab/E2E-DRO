@@ -19,7 +19,7 @@ import e2edro.e2edro as e2e
 class pred_then_opt(nn.Module):
     """Naive 'predict-then-optimize' portfolio construction module
     """
-    def __init__(self, n_x, n_y, n_obs, gamma=0.1, prisk='p_var'):
+    def __init__(self, n_x, n_y, n_obs, set_seed=None, prisk='p_var', opt_layer='nominal'):
         """Naive 'predict-then-optimize' portfolio construction module
 
         This NN module implements a linear prediction layer 'pred_layer' and an optimization layer 
@@ -36,12 +36,35 @@ class pred_then_opt(nn.Module):
         """
         super(pred_then_opt, self).__init__()
 
+        if set_seed is not None:
+            torch.manual_seed(set_seed)
+            self.seed = set_seed
+
         self.n_x = n_x
         self.n_y = n_y
         self.n_obs = n_obs
 
-        # Store 'gamma' (risk-return trade-off parameter)
-        self.gamma = torch.tensor(gamma, dtype=torch.double)
+        # Register 'gamma' (risk-return trade-off parameter)
+        # self.gamma = nn.Parameter(torch.FloatTensor(1).uniform_(0.037, 0.173))
+        self.gamma = nn.Parameter(torch.FloatTensor(1).uniform_(0.02, 0.1))
+        self.gamma.requires_grad = False
+
+        # Record the model design: nominal, base or DRO
+        if opt_layer == 'nominal':
+            self.model_type = 'nom'
+        elif opt_layer == 'base_mod':
+            self.model_type = 'base_mod' 
+        else:
+            # Register 'delta' (ambiguity sizing parameter) for DRO model
+            if opt_layer == 'hellinger':
+                ub = (1 - 1/(n_obs**0.5)) / 2
+                lb = (1 - 1/(n_obs**0.5)) / 10
+            else:
+                ub = (1 - 1/n_obs) / 2
+                lb = (1 - 1/n_obs) / 10
+            self.delta = nn.Parameter(torch.FloatTensor(1).uniform_(lb, ub))
+            self.delta.requires_grad = False
+            self.model_type = 'dro'
 
         # LAYER: OLS linear prediction
         self.pred_layer = nn.Linear(n_x, n_y)
@@ -49,7 +72,8 @@ class pred_then_opt(nn.Module):
         self.pred_layer.bias.requires_grad = False
         
         # LAYER: Optimization
-        self.opt_layer = e2e.nominal(n_y, n_obs, eval('rf.'+prisk))
+        self.opt_layer = eval('e2e.'+opt_layer)(n_y, n_obs, eval('rf.'+prisk))
+        # self.opt_layer = e2e.nominal(n_y, n_obs, eval('rf.'+prisk))
 
     #-----------------------------------------------------------------------------------------------
     # forward: forward pass of the e2e neural net
@@ -84,7 +108,12 @@ class pred_then_opt(nn.Module):
 
         # Optimize z per scenario
         # Determine whether nominal or dro model
-        z_star, = self.opt_layer(ep, y_hat, self.gamma, solver_args=solver_args)
+        if self.model_type == 'nom':
+            z_star, = self.opt_layer(ep, y_hat, self.gamma, solver_args=solver_args)
+        elif self.model_type == 'dro':
+            z_star, = self.opt_layer(ep, y_hat, self.gamma, self.delta, solver_args=solver_args)
+        elif self.model_type == 'base_mod':
+            z_star, = self.opt_layer(y_hat, solver_args=solver_args)
 
         return z_star, y_hat
 

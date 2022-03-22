@@ -55,137 +55,98 @@ class TrainTest:
         return self.data[self.numel[0]-self.n_obs:self.numel[1]]
 
 ####################################################################################################
-# Generate synthetic data
+# Generate linear synthetic data
 ####################################################################################################
-def synthetic(n_x, n_y, n_tot, split):
+def synthetic(n_x=5, n_y=10, n_tot=1200, n_obs=104, split=[0.6, 0.4], set_seed=100):
     """Generates synthetic (normally-distributed) asset and factor data
 
     Inputs
-    n_x: number of features
-    n_y: number of assets
-    n_tot: number of observations in the whole dataset
-    split: train-validation-test split as percentages 
+    n_x: Integer. Number of features
+    n_y: Integer. Number of assets
+    n_tot: Integer. Number of observations in the whole dataset
+    n_obs: Integer. Number of observations per batch
+    split: List of floats. Train-validation-test split as percentages (must sum up to one)
+    set_seed: Integer. Used for replicability of the numpy RNG.
 
     Outputs
     X: TrainValTest object with feature data split into train, validation and test subsets
     Y: TrainValTest object with asset data split into train, validation and test subsets
     """
-    split = int(n_tot * split)
+    np.random.seed(set_seed)
 
     # 'True' prediction bias and weights
-    a = torch.rand(n_x)
-    b = torch.randn(n_y, n_x)
+    a = np.sort(np.random.rand(n_y) / 250) + 0.0001
+    b = np.random.randn(n_x, n_y) / 5
+    c = np.random.randn(int((n_x+1)/2), n_y)
+
+    # Noise std dev
+    s = np.sort(np.random.rand(n_y))/20 + 0.02
 
     # Syntehtic features
-    X = torch.randn(n_tot, n_y)
+    X = np.random.randn(n_tot, n_x) / 50
+    X2 = np.random.randn(n_tot, int((n_x+1)/2)) / 50
 
     # Synthetic outputs
-    Y = a + X @ b + 0.3 * torch.randn(n_tot, n_x)
+    Y = a + X @ b + X2 @ c + s * np.random.randn(n_tot, n_y)
 
-    # Convert them to Variable type for use with torch library
-    X, Y = Variable(X), Variable(Y)
+    X = pd.DataFrame(X)
+    Y = pd.DataFrame(Y)
     
     # Partition dataset into training and testing sets
-    X, Y = TrainTest(), TrainTest()
-    X.train, X.val, X.test = X[:split[0]], X[split[0]:split[1]], X[split[1]:]
-    Y.train, Y.val, Y.test = Y[:split[0]], Y[split[0]:split[1]], Y[split[1]:]
+    return TrainTest(X, n_obs, split), TrainTest(Y, n_obs, split)
 
-    return X, Y
-
-#-----------------------------------------------------------------------------------------------
-# Option 2: Load data from Kenneth French's data library 
-# https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html 
-#-----------------------------------------------------------------------------------------------
-def FamaFrench(start, end, split, freq=''):
-    """Load data from Kenneth French's data library
-    https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html 
+####################################################################################################
+# Generate non-linear synthetic data
+####################################################################################################
+def synthetic_nl(n_x=5, n_y=10, n_tot=1200, n_obs=104, split=[0.6, 0.4], set_seed=100):
+    """Generates synthetic (normally-distributed) factor data and mix them following a quadratic 
+    model of linear, squared and cross products to produce the asset data. 
 
     Inputs
-    start: start date
-    end: end date
-    split: train-validation-test split as percentages 
-    freq: data frequency (daily, weekly, monthly)
+    n_x: Integer. Number of features
+    n_y: Integer. Number of assets
+    n_tot: Integer. Number of observations in the whole dataset
+    n_obs: Integer. Number of observations per batch
+    split: List of floats. Train-validation-test split as percentages (must sum up to one)
+    set_seed: Integer. Used for replicability of the numpy RNG.
 
     Outputs
-    X: TrainTest object with feature data split into train, validation and test subsets
-    Y: TrainTest object with asset data split into train, validation and test subsets
+    X: TrainValTest object with feature data split into train, validation and test subsets
+    Y: TrainValTest object with asset data split into train, validation and test subsets
     """
+    np.random.seed(set_seed)
 
-    if freq == 'daily' or freq == '_daily':
+    # 'True' prediction bias and weights
+    a = np.sort(np.random.rand(n_y) / 200) + 0.0005
+    b = np.random.randn(n_x, n_y) / 4
+    c = np.random.randn(int((n_x+1)/2), n_y)
+    d = np.random.randn(n_x**2, n_y) / n_x
 
-        freq = '_daily'
+    # Noise std dev
+    s = np.sort(np.random.rand(n_y))/20 + 0.02
 
-        # Download asset data
-        Y = pdr.get_data_famafrench('10_Industry_Portfolios'+freq, start=start, 
-                    end=end)[0] / 100
+    # Syntehtic features
+    X = np.random.randn(n_tot, n_x) / 50
+    X2 = np.random.randn(n_tot, int((n_x+1)/2)) / 50
+    X_cross = 100 * (X[:,:,None] * X[:,None,:]).reshape(n_tot, n_x**2)
+    X_cross = X_cross - X_cross.mean(axis=0)
 
-        # Download factor data
-        X = pdr.get_data_famafrench('F-F_Research_Data_5_Factors_2x3'+freq, start=start,
-                    end=end)[0]
-        rf_df = X['RF']
-        X = X.drop(['RF'], axis=1)
-        mom_df = pdr.get_data_famafrench('F-F_Momentum_Factor'+freq, start=start, end=end)[0]
-        st_df = pdr.get_data_famafrench('F-F_ST_Reversal_Factor'+freq, start=start, end=end)[0]
-        lt_df = pdr.get_data_famafrench('F-F_LT_Reversal_Factor'+freq, start=start, end=end)[0]
+    # Synthetic outputs
+    Y = a + X @ b + X2 @ c + X_cross @ d + s * np.random.randn(n_tot, n_y)
 
-        # Concatenate factors as a pandas dataframe
-        X = pd.concat([X, mom_df, st_df, lt_df], axis=1) / 100
-
-    elif freq == 'weekly' or freq == '_weekly':
-
-        freq = '_daily'
-
-        # Download asset data
-        Y = pdr.get_data_famafrench('10_Industry_Portfolios'+freq, start=start, 
-                    end=end)[0] / 100
-
-        # Download factor data
-        X = pdr.get_data_famafrench('F-F_Research_Data_5_Factors_2x3'+freq, start=start,
-                    end=end)[0]
-        rf_df = X['RF']
-        X = X.drop(['RF'], axis=1)
-        mom_df = pdr.get_data_famafrench('F-F_Momentum_Factor'+freq, start=start, end=end)[0]
-        st_df = pdr.get_data_famafrench('F-F_ST_Reversal_Factor'+freq, start=start, end=end)[0]
-        lt_df = pdr.get_data_famafrench('F-F_LT_Reversal_Factor'+freq, start=start, end=end)[0]
-
-        # Concatenate factors as a pandas dataframe
-        X = pd.concat([X, mom_df, st_df, lt_df], axis=1) / 100
-
-        # Convert daily returns to weekly returns
-        Y = Y.resample('W-FRI').agg(lambda x: (x + 1).prod() - 1)
-        X = X.resample('W-THU').agg(lambda x: (x + 1).prod() - 1)
-
-    elif freq == 'monthly' or freq == '_monthly' or freq == '':
-
-        freq = ''
-
-        # Download asset data
-        Y = pdr.get_data_famafrench('10_Industry_Portfolios'+freq, start=start, 
-                    end=end)[0] / 100
-
-        # Download factor data
-        X = pdr.get_data_famafrench('F-F_Research_Data_5_Factors_2x3'+freq, start=start,
-                    end=end)[0]
-        rf_df = X['RF']
-        X = X.drop(['RF'], axis=1)
-        mom_df = pdr.get_data_famafrench('F-F_Momentum_Factor'+freq, start=start, end=end)[0]
-        st_df = pdr.get_data_famafrench('F-F_ST_Reversal_Factor'+freq, start=start, end=end)[0]
-        lt_df = pdr.get_data_famafrench('F-F_LT_Reversal_Factor'+freq, start=start, end=end)[0]
-
-        # Concatenate factors as a pandas dataframe
-        X = pd.concat([X, mom_df, st_df, lt_df], axis=1) / 100
-
+    X = pd.DataFrame(X)
+    Y = pd.DataFrame(Y)
+    
     # Partition dataset into training and testing sets
-    X, Y = TrainTest(X, split), TrainTest(Y, split)
-
-    return X, Y
+    return TrainTest(X, n_obs, split), TrainTest(Y, n_obs, split)
 
 #-----------------------------------------------------------------------------------------------
 # Option 3: Factors from Kenneth French's data library and asset data from AlphaVantage
 # https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html 
 # https://www.alphavantage.co 
 #-----------------------------------------------------------------------------------------------
-def AV(start, end, split, freq='weekly', n_obs=104, use_cache=False, n_y=None):
+def AV(start, end, split, freq='weekly', n_obs=104, n_y=None, use_cache=False, save_results=False, 
+        AV_key=None):
     """Load data from Kenneth French's data library
     https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html 
 
@@ -194,6 +155,9 @@ def AV(start, end, split, freq='weekly', n_obs=104, use_cache=False, n_y=None):
     end: end date
     split: train-validation-test split as percentages 
     freq: data frequency (daily, weekly, monthly)
+    n_obs: number of observations per batch
+    use_cache: Boolean. State whether to load cached data or download data
+    save_results: Boolean. State whether the data should be cached for future use. 
 
     Outputs
     X: TrainTest object with feature data split into train, validation and test subsets
@@ -201,15 +165,19 @@ def AV(start, end, split, freq='weekly', n_obs=104, use_cache=False, n_y=None):
     """
 
     if use_cache:
-        X = pd.read_pickle('./saved_models/factor_'+freq+'.pkl')
-        Y = pd.read_pickle('./saved_models/asset_'+freq+'.pkl')
+        X = pd.read_pickle('./cache/factor_'+freq+'.pkl')
+        Y = pd.read_pickle('./cache/asset_'+freq+'.pkl')
     else:
         tick_list = ['AAPL', 'MSFT', 'AMZN', 'C', 'JPM', 'BAC', 'XOM', 'HAL', 'MCD', 'WMT', 'COST', 'CAT', 'LMT', 'JNJ', 'PFE', 'DIS', 'VZ', 'T', 'ED', 'NEM']
 
         if n_y is not None:
             tick_list = tick_list[:n_y]
 
-        ts = TimeSeries(key='CV2O4TLLVRI8TGMD', output_format='pandas', indexing_type='date')
+        if AV_key is None:
+            print("""A personal AlphaVantage API key is required to load the asset pricing data. If you do not have a key, you can get one from www.alphavantage.co (free for academic users)""")
+            AV_key = input("Enter your AlphaVantage API key: ")
+
+        ts = TimeSeries(key=AV_key, output_format='pandas', indexing_type='date')
 
         # Download asset data
         Y = []
@@ -242,8 +210,9 @@ def AV(start, end, split, freq='weekly', n_obs=104, use_cache=False, n_y=None):
             Y = Y.resample('W-FRI').agg(lambda x: (x + 1).prod() - 1)
             X = X.resample('W-FRI').agg(lambda x: (x + 1).prod() - 1)
 
-        X.to_pickle('./saved_models/factor_'+freq+'.pkl')
-        Y.to_pickle('./saved_models/asset_'+freq+'.pkl')
+        if save_results:
+            X.to_pickle('./cache/factor_'+freq+'.pkl')
+            Y.to_pickle('./cache/asset_'+freq+'.pkl')
 
     # Partition dataset into training and testing sets. Lag the data by one observation
     return TrainTest(X[:-1], n_obs, split), TrainTest(Y[1:], n_obs, split)
