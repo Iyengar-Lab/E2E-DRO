@@ -112,7 +112,7 @@ def nominal(n_y, n_obs, prisk):
     
     # Constraints
     constraints = [cp.sum(z) == 1,
-                mu_aux == y_hat @ z]
+                    mu_aux == y_hat @ z]
     for i in range(n_obs):
         constraints += [obj_aux[i] >= prisk(z, c_aux, ep[i])]
 
@@ -178,8 +178,8 @@ def tv(n_y, n_obs, prisk):
     
     # Constraints
     constraints = [cp.sum(z) == 1,
-                beta_aux >= -lambda_aux,
-                mu_aux == y_hat @ z]
+                    beta_aux >= -lambda_aux,
+                    mu_aux == y_hat @ z]
     for i in range(n_obs):
         constraints += [beta_aux[i] >= prisk(z, c_aux, ep[i]) - eta_aux]
         constraints += [lambda_aux >= prisk(z, c_aux, ep[i]) - eta_aux]
@@ -249,7 +249,7 @@ def hellinger(n_y, n_obs, prisk):
 
     # Constraints
     constraints = [cp.sum(z) == 1,
-                mu_aux == y_hat @ z]
+                    mu_aux == y_hat @ z]
     for i in range(n_obs):
         constraints += [xi_aux + lambda_aux >= prisk(z, c_aux, ep[i]) + tau_aux[i]]
         constraints += [beta_aux[i] >= cp.quad_over_lin(lambda_aux, tau_aux[i])]
@@ -412,8 +412,10 @@ class e2e_net(nn.Module):
         ep = Y - Y_hat[:-1]
         y_hat = Y_hat[-1]
 
-        # Optimization solver arguments (from CVXPY for SCS solver)
-        solver_args = {'solve_method': 'ECOS'}
+        # Optimization solver arguments (from CVXPY for ECOS/SCS solver)
+        solver_args = {'solve_method': 'ECOS', 'max_iters': 120, 'abstol': 1e-7}
+        # solver_args = {'solve_method': 'SCS', 'eps': 1e-7, 'acceleration_lookback': 5,
+        # 'max_iters':20000}
 
         # Optimize z per scenario
         # Determine whether nominal or dro model
@@ -626,6 +628,11 @@ class e2e_net(nn.Module):
             self.gamma_trained = []
             self.delta_trained = []
 
+        # Store the squared L2-norm of the prediction weights and their difference from OLS weights
+        if self.pred_model == 'linear':
+            self.theta_L2 = []
+            self.theta_dist_L2 = []
+
         # Store initial train/test split
         init_split = Y.split
 
@@ -649,8 +656,6 @@ class e2e_net(nn.Module):
                                                     self.perf_period))
             test_set = DataLoader(pc.SlidingWindow(X.test(), Y.test(), self.n_obs, 0))
 
-            # # Condition "i==0" added on 21-Mar-2022 
-            # if i == 0:
             # Reset learnable parameters gamma and delta
             self.load_state_dict(torch.load(self.init_state_path))
 
@@ -673,11 +678,21 @@ class e2e_net(nn.Module):
             # Train model using all available data preceding the test window
             self.net_train(train_set, lr=lr, epochs=epochs)
 
+            # Store trained values of gamma and delta
             if self.model_type == 'nom':
                 self.gamma_trained.append(self.gamma.item())
             elif self.model_type == 'dro':
                 self.gamma_trained.append(self.gamma.item())
                 self.delta_trained.append(self.delta.item())
+
+            # Store the squared L2 norm of theta and distance between theta and OLS weights
+            if self.pred_model == 'linear':
+                theta_L2 = (torch.sum(self.pred_layer.weight**2, axis=()) + 
+                            torch.sum(self.pred_layer.bias**2, axis=()))
+                theta_dist_L2 = (torch.sum((self.pred_layer.weight - Theta[:,1:])**2, axis=()) + 
+                                torch.sum((self.pred_layer.bias - Theta[:,0])**2, axis=()))
+                self.theta_L2.append(theta_L2)
+                self.theta_dist_L2.append(theta_dist_L2)
 
             # Test model
             with torch.no_grad():

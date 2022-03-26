@@ -20,10 +20,10 @@ from e2edro import BaseModels as bm
 from e2edro import PlotFunctions as pf
 
 # Path to cache the data, models and results
-cache_path = "./new_cache/exp/"
+cache_path = "./cache/exp/"
 
 ####################################################################################################
-# Load data
+# Experiments 1-4 (with hisotrical data): Load data
 ####################################################################################################
 
 # Data frequency and start/end dates
@@ -86,6 +86,42 @@ set_seed = 1000
 use_cache = True
 
 #---------------------------------------------------------------------------------------------------
+# Speed up test
+#---------------------------------------------------------------------------------------------------
+
+import time
+from importlib import reload
+
+reload(e2e)
+# Exp 1: Nominal E2E
+nom_test = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk,
+                    train_pred=True, train_gamma=True, train_delta=False,
+                    set_seed=set_seed, opt_layer='nominal', perf_loss=perf_loss, 
+                    cache_path=cache_path, perf_period=perf_period,
+                    pred_loss_factor=pred_loss_factor).double()
+nom_test.lr = lr_list[1]
+nom_test.epochs = 3
+
+start = time.time()
+nom_test.net_roll_test(X, Y, n_roll=1)
+print(time.time() - start)
+
+# Try TV distance
+reload(e2e)
+# Exp 1: DR E2E
+dr_test = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk,
+                    train_pred=True, train_gamma=True, train_delta=True,
+                    set_seed=set_seed, opt_layer='tv', perf_loss=perf_loss, 
+                    cache_path=cache_path, perf_period=perf_period,
+                    pred_loss_factor=pred_loss_factor).double()
+dr_test.lr = lr_list[1]
+dr_test.epochs = 3
+
+start = time.time()
+dr_test.net_roll_test(X, Y, n_roll=1)
+print(time.time() - start)
+
+#---------------------------------------------------------------------------------------------------
 # Run 
 #---------------------------------------------------------------------------------------------------
 
@@ -113,6 +149,23 @@ if use_cache:
         nom_net_learn_theta = pickle.load(inp)
     with open(cache_path+'dr_net_learn_theta.pkl', 'rb') as inp:
         dr_net_learn_theta = pickle.load(inp)
+
+    with open(cache_path+'base_net_ext.pkl', 'rb') as inp:
+        base_net_ext = pickle.load(inp)
+    with open(cache_path+'nom_net_ext.pkl', 'rb') as inp:
+        nom_net_ext = pickle.load(inp)
+    with open(cache_path+'dr_net_ext.pkl', 'rb') as inp:
+        dr_net_ext = pickle.load(inp)
+    with open(cache_path+'dr_net_learn_delta_ext.pkl', 'rb') as inp:
+        dr_net_learn_delta_ext = pickle.load(inp)
+    with open(cache_path+'nom_net_learn_gamma_ext.pkl', 'rb') as inp:
+        nom_net_learn_gamma_ext = pickle.load(inp)
+    with open(cache_path+'dr_net_learn_gamma_ext.pkl', 'rb') as inp:
+        dr_net_learn_gamma_ext = pickle.load(inp)
+    with open(cache_path+'nom_net_learn_theta_ext.pkl', 'rb') as inp:
+        nom_net_learn_theta_ext = pickle.load(inp)
+    with open(cache_path+'dr_net_learn_theta_ext.pkl', 'rb') as inp:
+        dr_net_learn_theta_ext = pickle.load(inp)
 else:
     # Exp 1: Equal weight portfolio
     ew_net = bm.equal_weight(n_x, n_y, n_obs)
@@ -441,25 +494,147 @@ exp4_trained_vals = pd.DataFrame(zip(nom_net_learn_theta.gamma_trained,
                                     dr_net_learn_theta.delta_trained), 
                                 columns=['Nom. gamma', 'DR gamma', 'DR delta'])
 
-#---------------------------------------------------------------------------------------------------
-# Experiment 5: Non-linear models
-#---------------------------------------------------------------------------------------------------
+####################################################################################################
+# Experiment 5 (with synthetic data)
+####################################################################################################
 
 # Path to cache the data, models and results
-cache_path_exp5 = "./new_cache/exp5/"
+cache_path_exp5 = "./cache/exp5/"
 
-with open(cache_path_exp5+'nom_net_linear.pkl', 'rb') as inp:
-    nom_net_linear = pickle.load(inp)
-with open(cache_path_exp5+'nom_net_2layer.pkl', 'rb') as inp:
-    nom_net_2layer = pickle.load(inp)
-with open(cache_path_exp5+'nom_net_3layer.pkl', 'rb') as inp:
-    nom_net_3layer = pickle.load(inp)
-with open(cache_path_exp5+'dr_net_linear.pkl', 'rb') as inp:
-    dr_net_linear = pickle.load(inp)
-with open(cache_path_exp5+'dr_net_2layer.pkl', 'rb') as inp:
-    dr_net_2layer = pickle.load(inp)
-with open(cache_path_exp5+'dr_net_3layer.pkl', 'rb') as inp:
-    dr_net_3layer = pickle.load(inp)
+#---------------------------------------------------------------------------------------------------
+# Experiment 5: Load data
+#---------------------------------------------------------------------------------------------------
+
+# Train, validation and test split percentage
+split = [0.7, 0.3]
+
+# Number of feattures and assets
+n_x, n_y = 5, 10
+
+# Number of observations per window and total number of observations
+n_obs, n_tot = 100, 1200
+
+# Synthetic data: randomly generate data from a linear model
+X, Y = dl.synthetic_nl(n_x=n_x, n_y=n_y, n_obs=n_obs, n_tot=n_tot, split=split)
+
+#---------------------------------------------------------------------------------------------------
+# Experiment 5: Initialize parameters
+#---------------------------------------------------------------------------------------------------
+
+# Performance loss function and performance period 'v+1'
+perf_loss='sharpe_loss'
+perf_period = 13
+
+# Weight assigned to MSE prediction loss function
+pred_loss_factor = 0.5
+
+# Risk function (default set to variance)
+prisk = 'p_var'
+
+# Robust decision layer to use: hellinger or tv
+dr_layer = 'hellinger'
+
+# Determine whether to train the prediction weights Theta
+train_pred = True
+
+# List of learning rates to test
+lr_list = [0.005, 0.0125, 0.02]
+
+# List of total no. of epochs to test
+epoch_list = [20, 30, 40, 50]
+
+# For replicability, set the random seed for the numerical experiments
+set_seed = 6000
+
+# Load saved models (default is False)
+use_cache = True
+
+#---------------------------------------------------------------------------------------------------
+# Run 
+#---------------------------------------------------------------------------------------------------
+if use_cache:
+    with open(cache_path_exp5+'nom_net_linear.pkl', 'rb') as inp:
+        nom_net_linear = pickle.load(inp)
+    with open(cache_path_exp5+'nom_net_2layer.pkl', 'rb') as inp:
+        nom_net_2layer = pickle.load(inp)
+    with open(cache_path_exp5+'nom_net_3layer.pkl', 'rb') as inp:
+        nom_net_3layer = pickle.load(inp)
+    with open(cache_path_exp5+'dr_net_linear.pkl', 'rb') as inp:
+        dr_net_linear = pickle.load(inp)
+    with open(cache_path_exp5+'dr_net_2layer.pkl', 'rb') as inp:
+        dr_net_2layer = pickle.load(inp)
+    with open(cache_path_exp5+'dr_net_3layer.pkl', 'rb') as inp:
+        dr_net_3layer = pickle.load(inp)
+else:
+    # Nominal E2E linear
+    nom_net_linear = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                    train_gamma=True, train_delta=True, 
+                    set_seed=set_seed, opt_layer='nominal', perf_loss=perf_loss, 
+                    perf_period=perf_period, pred_loss_factor=pred_loss_factor).double()
+    nom_net_linear.net_cv(X, Y, lr_list, epoch_list, n_val=1)
+    nom_net_linear.net_roll_test(X, Y, n_roll=1)
+    with open(cache_path+'nom_net_linear.pkl', 'wb') as outp:
+        pickle.dump(nom_net_linear, outp, pickle.HIGHEST_PROTOCOL)
+    print('nom_net_linear run complete')
+
+    # DR E2E linear
+    dr_net_linear = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                    train_gamma=True, train_delta=True, 
+                    set_seed=set_seed, opt_layer=dr_layer, perf_loss=perf_loss, 
+                    perf_period=perf_period, pred_loss_factor=pred_loss_factor).double()
+    dr_net_linear.net_cv(X, Y, lr_list, epoch_list, n_val=1)
+    dr_net_linear.net_roll_test(X, Y, n_roll=1)
+    with open(cache_path+'dr_net_linear.pkl', 'wb') as outp:
+        pickle.dump(dr_net_linear, outp, pickle.HIGHEST_PROTOCOL)
+    print('dr_net_linear run complete')
+
+    # Nominal E2E 2-layer
+    nom_net_2layer = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                    train_gamma=True, train_delta=True, pred_model='2layer',
+                    set_seed=set_seed, opt_layer='nominal', perf_loss=perf_loss, 
+                    perf_period=perf_period, pred_loss_factor=pred_loss_factor).double()
+    nom_net_2layer.net_cv(X, Y, lr_list, epoch_list, n_val=1)
+    nom_net_2layer.net_roll_test(X, Y, n_roll=1)
+    with open(cache_path+'nom_net_2layer.pkl', 'wb') as outp:
+        pickle.dump(nom_net_2layer, outp, pickle.HIGHEST_PROTOCOL)
+    print('nom_net_2layer run complete')
+
+    # DR E2E 2-layer
+    dr_net_2layer = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                    train_gamma=True, train_delta=True, pred_model='2layer',
+                    set_seed=set_seed, opt_layer=dr_layer, perf_loss=perf_loss, 
+                    perf_period=perf_period, pred_loss_factor=pred_loss_factor).double()
+    dr_net_2layer.net_cv(X, Y, lr_list, epoch_list, n_val=1)
+    dr_net_2layer.net_roll_test(X, Y, n_roll=1)
+    with open(cache_path+'dr_net_2layer.pkl', 'wb') as outp:
+        pickle.dump(dr_net_2layer, outp, pickle.HIGHEST_PROTOCOL)
+    print('dr_net_2layer run complete')
+
+    # Nominal E2E 3-layer
+    nom_net_3layer = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                    train_gamma=True, train_delta=True, pred_model='3layer',
+                    set_seed=set_seed, opt_layer='nominal', perf_loss=perf_loss, 
+                    perf_period=perf_period, pred_loss_factor=pred_loss_factor).double()
+    nom_net_3layer.net_cv(X, Y, lr_list, epoch_list, n_val=1)
+    nom_net_3layer.net_roll_test(X, Y, n_roll=1)
+    with open(cache_path+'nom_net_3layer.pkl', 'wb') as outp:
+        pickle.dump(nom_net_3layer, outp, pickle.HIGHEST_PROTOCOL)
+    print('nom_net_3layer run complete')
+
+    # DR E2E 3-layer
+    dr_net_3layer = e2e.e2e_net(n_x, n_y, n_obs, prisk=prisk, train_pred=train_pred, 
+                    train_gamma=True, train_delta=True, pred_model='3layer',
+                    set_seed=set_seed, opt_layer=dr_layer, perf_loss=perf_loss, 
+                    perf_period=perf_period, pred_loss_factor=pred_loss_factor).double()
+    dr_net_3layer.net_cv(X, Y, lr_list, epoch_list, n_val=1)
+    dr_net_3layer.net_roll_test(X, Y, n_roll=1)
+    with open(cache_path+'dr_net_3layer.pkl', 'wb') as outp:
+        pickle.dump(dr_net_3layer, outp, pickle.HIGHEST_PROTOCOL)
+    print('dr_net_3layer run complete')
+
+#---------------------------------------------------------------------------------------------------
+# Experiment 5: Results
+#---------------------------------------------------------------------------------------------------
 
 # Validation results table
 exp5_validation_table = pd.concat((nom_net_linear.cv_results.round(4), 
@@ -500,9 +675,6 @@ portfolio_list = [nom_net_linear.portfolio, dr_net_linear.portfolio, nom_net_2la
 portfolio_colors = ["dodgerblue", "salmon", "mediumblue", "firebrick", "forestgreen", "goldenrod"]
 pf.wealth_plot(portfolio_list, portfolio_names, portfolio_colors, 
                 path=cache_path+"plots/wealth_exp5.pdf")
-
-pf.sr_bar(portfolio_list, portfolio_names, portfolio_colors, 
-                path=cache_path+"plots/sr_bar_exp5.pdf")
 
 # List of initial parameters
 exp5_param_dict = dict({'nom_net_linear':nom_net_linear.gamma.item(),

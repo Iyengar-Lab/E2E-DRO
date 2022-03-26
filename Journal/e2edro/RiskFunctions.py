@@ -22,7 +22,7 @@ def p_var(z, c, x):
     Note: This function is only one component of the portfolio variance, and must be aggregated 
     over all scenarios 'x' to recover the complete variance
     """
-    return (x @ z - c)**2
+    return cp.square(x @ z - c)
 
 def p_mad(z, c, x):
     """Mean absolute deviation (MAD)
