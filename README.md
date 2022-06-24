@@ -5,7 +5,7 @@ This repository contains the source code to reproduce the numerical results in o
 # Introduction
 We propose an end-to-end distributionally robust system for portfolio construction that integrates the asset return prediction model with a distributionally robust portfolio optimization model. We also show how to learn the risk-tolerance parameter and the degree of robustness directly from data. End-to-end systems have an advantage in that information can be communicated between the prediction and decision layers during training, allowing the parameters to be trained for the final task rather than solely for predictive performance. However, existing end-to-end systems are not able to quantify and correct for the impact of model risk on the decision layer. Our proposed distributionally robust end-to-end portfolio selection system explicitly accounts for the impact of model risk. The decision layer chooses portfolios by solving a minimax problem where the distribution of the asset returns is assumed to belong to an ambiguity set centered around a nominal distribution. Using convex duality, we recast the minimax problem in a form that allows for efficient training of the end-to-end system.
 
-A copy of our paper is available in arXiv: https://arxiv.org/abs/2206.05134
+A copy of our paper is available in arXiv: [https://arxiv.org/abs/2206.05134](https://arxiv.org/pdf/2206.05134.pdf)
 
 # Dependencies
 - Python 3.x/numpy/scipy/pandas/matplotlib
