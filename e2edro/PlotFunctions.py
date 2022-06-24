@@ -3,12 +3,10 @@
 ####################################################################################################
 ## Import libraries
 ####################################################################################################
-from cProfile import label
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.stats.mstats import gmean
-from matplotlib.ticker import MultipleLocator
 
 # Matplotlib parameters
 plt.close("all")
