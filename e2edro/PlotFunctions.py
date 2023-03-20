@@ -203,4 +203,45 @@ def learn_plot(trained_vals, colors, marker, delta_mark, path=None):
     if path is not None:
         fig.savefig(path, bbox_inches='tight')
         fig.savefig(path[0:-3]+'eps', bbox_inches='tight', format='eps')
+        
+####################################################################################################
+# Other results
+####################################################################################################
+#---------------------------------------------------------------------------------------------------
+# fin_table
+#---------------------------------------------------------------------------------------------------
+def fin_table(portfolios:list, names:list) -> pd.DataFrame:
+    """Compute portfolio performance statistics and summarize them as a table
     
+    Inputs
+    List of backtest-type objects
+    
+    Outputs
+    Table of results    
+    """
+    
+    rets =[]
+    vols = []
+    SRs = []
+    invHidxs = []
+    
+    for portfolio in portfolios:
+        ret = (portfolio.rets.tri.iloc[-1] ** 
+                (1/portfolio.rets.tri.shape[0]))**52 - 1
+        vol = portfolio.vol * np.sqrt(52)
+        SR = ret / vol
+        invHidx = round(1/(pd.DataFrame(portfolio.weights) ** 2).sum(axis=1).mean(), ndigits=2)
+        rets.append(round(ret*100, ndigits=1))
+        vols.append(round(vol*100, ndigits=1))
+        SRs.append(round(SR, ndigits=2))
+        invHidxs.append(invHidx)
+
+    table  = pd.DataFrame(np.array([rets, vols, SRs, invHidxs]), 
+                                   columns=names)
+    table.set_axis(['Return (%)', 
+                    'Volatility (%)', 
+                    'Sharpe ratio',
+                    'Avg. inv. HHI'], 
+                   axis=0, inplace=True) 
+    
+    return table

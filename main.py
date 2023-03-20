@@ -283,42 +283,35 @@ if use_cache:
 #---------------------------------------------------------------------------------------------------
 
 # Validation results table
-dr_net.cv_results = dr_net.cv_results.sort_values(['epochs', 'lr'], ascending=[True, 
-                                                                    True]).reset_index(drop=True)
+dr_net.cv_results = dr_net.cv_results.sort_values(['epochs', 'lr'], 
+                                                  ascending=[True, True]
+                                                  ).reset_index(drop=True)
 exp1_validation_table = pd.concat((base_net.cv_results.round(4), 
                             nom_net.cv_results.val_loss.round(4), 
                             dr_net.cv_results.val_loss.round(4)), axis=1)
 exp1_validation_table.set_axis(['eta', 'Epochs', 'Base', 'Nom.', 'DR'], 
                         axis=1, inplace=True) 
 
-# Out-of-sample summary statistics table
-portfolios = ["ew_net", "po_net", "base_net", "nom_net", "dr_net"]
-rets =[]
-vols = []
-SRs = []
-for portfolio in portfolios:
-    ret = (eval(portfolio).portfolio.rets.tri.iloc[-1] ** 
-            (1/eval(portfolio).portfolio.rets.tri.shape[0]))**52 - 1
-    vol = eval(portfolio).portfolio.vol * np.sqrt(52)
-    SR = ret / vol
-    rets.append(round(ret*100, ndigits=1))
-    vols.append(round(vol*100, ndigits=1))
-    SRs.append(round(SR, ndigits=2))
-
-exp1_fin_table  = pd.DataFrame(np.array([rets, vols, SRs]), columns=['EW', 'PO', 'Base', 
-                                                                    'Nom.', 'DR'])
-exp1_fin_table.set_axis(['Return (%)', 'Volatility (%)', 'Sharpe ratio'], axis=0, inplace=True)
-
-# Wealth evolution plot
 plt.rcParams['text.usetex'] = True
 portfolio_names = [r'EW', r'PO', r'Base', r'Nominal', r'DR']
-portfolio_list = [ew_net.portfolio, po_net.portfolio, base_net.portfolio, nom_net.portfolio,
-                dr_net.portfolio]
-portfolio_colors = ["dimgray", "forestgreen", "goldenrod", "dodgerblue", "salmon"]
+portfolios = [ew_net.portfolio,
+              po_net.portfolio,
+              base_net.portfolio,
+              nom_net.portfolio,
+              dr_net.portfolio]
 
-pf.wealth_plot(portfolio_list, portfolio_names, portfolio_colors, 
+# Out-of-sample summary statistics table
+exp1_fin_table = pf.fin_table(portfolios, portfolio_names)
+
+# Wealth evolution plot
+portfolio_colors = ["dimgray", 
+                    "forestgreen", 
+                    "goldenrod", 
+                    "dodgerblue", 
+                    "salmon"]
+pf.wealth_plot(portfolios, portfolio_names, portfolio_colors, 
                 path=cache_path+"plots/wealth_exp1.pdf")
-pf.sr_bar(portfolio_list, portfolio_names, portfolio_colors, 
+pf.sr_bar(portfolios, portfolio_names, portfolio_colors, 
                 path=cache_path+"plots/sr_bar_exp1.pdf")
 
 # List of initial parameters
@@ -330,7 +323,9 @@ exp1_param_dict = dict({'po_net':po_net.gamma.item(),
 exp1_trained_vals = pd.DataFrame(zip([nom_net.gamma_init]+nom_net.gamma_trained, 
                                     [dr_net.gamma_init]+dr_net.gamma_trained, 
                                     [dr_net.delta_init]+dr_net.delta_trained), 
-                                    columns=[r'Nom. $\gamma$', r'DR $\gamma$', r'DR $\delta$'])
+                                    columns=[r'Nom. $\gamma$', 
+                                             r'DR $\gamma$', 
+                                             r'DR $\delta$'])
 
 #---------------------------------------------------------------------------------------------------
 # Experiment 2: Learn delta
@@ -342,32 +337,20 @@ dr_net_learn_delta.cv_results = dr_net_learn_delta.cv_results.sort_values(['epoc
 exp2_validation_table = dr_net_learn_delta.cv_results.round(4)
 exp2_validation_table.set_axis(['eta', 'Epochs', 'DR (learn delta)'], axis=1, inplace=True) 
 
-# Out-of-sample summary statistics table
-portfolios = ["po_net", "dr_po_net", "dr_net_learn_delta"]
-rets =[]
-vols = []
-SRs = []
-for portfolio in portfolios:
-    ret = (eval(portfolio).portfolio.rets.tri.iloc[-1] ** 
-            (1/eval(portfolio).portfolio.rets.tri.shape[0]))**52 - 1
-    vol = eval(portfolio).portfolio.vol * np.sqrt(52)
-    SR = ret / vol
-    rets.append(round(ret*100, ndigits=1))
-    vols.append(round(vol*100, ndigits=1))
-    SRs.append(round(SR, ndigits=2))
-
-exp2_fin_table  = pd.DataFrame(np.array([rets, vols, SRs]), columns=['PO','DR','DR (learn delta)'])
-exp2_fin_table.set_axis(['Return (%)', 'Volatility (%)', 'Sharpe ratio'], axis=0, inplace=True) 
-
-# Wealth evolution plots
 plt.rcParams['text.usetex'] = True
 portfolio_names = [r'PO', r'DR', r'DR (learn $\delta$)']
-portfolio_list = [po_net.portfolio, dr_po_net.portfolio, dr_net_learn_delta.portfolio]
-portfolio_colors = ["forestgreen", "dodgerblue", "salmon"]
+portfolios = [po_net.portfolio, 
+              dr_po_net.portfolio, 
+              dr_net_learn_delta.portfolio]
 
-pf.wealth_plot(portfolio_list, portfolio_names, portfolio_colors, 
+# Out-of-sample summary statistics table
+exp2_fin_table = pf.fin_table(portfolios, portfolio_names)
+
+# Wealth evolution plots
+portfolio_colors = ["forestgreen", "dodgerblue", "salmon"]
+pf.wealth_plot(portfolios, portfolio_names, portfolio_colors, 
                 path=cache_path+"plots/wealth_exp2.pdf")
-pf.sr_bar(portfolio_list, portfolio_names, portfolio_colors, 
+pf.sr_bar(portfolios, portfolio_names, portfolio_colors, 
                 path=cache_path+"plots/sr_bar_exp2.pdf")
 
 # List of initial parameters
@@ -394,34 +377,20 @@ exp3_validation_table = pd.concat((nom_net_learn_gamma.cv_results.round(4),
 exp3_validation_table.set_axis(['eta', 'Epochs', 'Nom. (learn gamma)', 'DR (learn gamma)', 
                                 'DR (learn gamma + delta)'], axis=1, inplace=True) 
 
-# Out-of-sample summary statistics table
-# portfolios = ["po_net", "nom_net_learn_gamma", "dr_net_learn_gamma", "dr_net_learn_gamma_delta"]
-portfolios = ["po_net", "nom_net_learn_gamma", "dr_net_learn_gamma"]
-rets =[]
-vols = []
-SRs = []
-for portfolio in portfolios:
-    ret = (eval(portfolio).portfolio.rets.tri.iloc[-1] ** 
-            (1/eval(portfolio).portfolio.rets.tri.shape[0]))**52 - 1
-    vol = eval(portfolio).portfolio.vol * np.sqrt(52)
-    SR = ret / vol
-    rets.append(round(ret*100, ndigits=1))
-    vols.append(round(vol*100, ndigits=1))
-    SRs.append(round(SR, ndigits=2))
+plt.rcParams['text.usetex'] = True
+portfolio_names = [r'PO', r'Nominal', r'DR']
+portfolios = [po_net.portfolio, 
+              nom_net_learn_gamma.portfolio, 
+              dr_net_learn_gamma.portfolio]
 
-exp3_fin_table  = pd.DataFrame(np.array([rets, vols, SRs]), columns=['PO', 'Nom. (learn gamma)',
-                                                                    'DR (learn gamma)'])
-exp3_fin_table.set_axis(['Return (%)', 'Volatility (%)', 'Sharpe ratio'], axis=0, inplace=True) 
+# Out-of-sample summary statistics table
+exp3_fin_table = pf.fin_table(portfolios, portfolio_names)
 
 # Wealth evolution plots
-# portfolio_names = [r'PO', r'Nominal', r'DR ($\gamma$)', r'DR ($\gamma + \delta$)']
-portfolio_names = [r'PO', r'Nominal', r'DR']
-portfolio_list = [po_net.portfolio, nom_net_learn_gamma.portfolio, dr_net_learn_gamma.portfolio]
 portfolio_colors = ["forestgreen", "dodgerblue", "salmon"]
-
-pf.wealth_plot(portfolio_list, portfolio_names, portfolio_colors, 
+pf.wealth_plot(portfolios, portfolio_names, portfolio_colors, 
                 path=cache_path+"plots/wealth_exp3.pdf")
-pf.sr_bar(portfolio_list, portfolio_names, portfolio_colors, 
+pf.sr_bar(portfolios, portfolio_names, portfolio_colors, 
                 path=cache_path+"plots/sr_bar_exp3.pdf")
 
 # List of initial parameters
@@ -452,33 +421,21 @@ exp4_validation_table = pd.concat((base_net.cv_results.round(4),
 exp4_validation_table.set_axis(['eta', 'Epochs', 'Base', 'Nom.', 'DR'], 
                         axis=1, inplace=True) 
 
-# Out-of-sample summary statistics table
-portfolios = ["po_net", "base_net", "nom_net_learn_theta", "dr_net_learn_theta"]
-rets =[]
-vols = []
-SRs = []
-for portfolio in portfolios:
-    ret = (eval(portfolio).portfolio.rets.tri.iloc[-1] ** 
-            (1/eval(portfolio).portfolio.rets.tri.shape[0]))**52 - 1
-    vol = eval(portfolio).portfolio.vol * np.sqrt(52)
-    SR = ret / vol
-    rets.append(round(ret*100, ndigits=1))
-    vols.append(round(vol*100, ndigits=1))
-    SRs.append(round(SR, ndigits=2))
-
-exp4_fin_table  = pd.DataFrame(np.array([rets, vols, SRs]), columns=['PO', 'Base', 'Nom.', 'DR'])
-exp4_fin_table.set_axis(['Return (%)', 'Volatility (%)', 'Sharpe ratio'], axis=0, inplace=True) 
-
-# Wealth evolution plots
 plt.rcParams['text.usetex'] = True
 portfolio_names = [r'PO', r'Base', r'Nominal', r'DR']
-portfolio_list = [po_net.portfolio, base_net.portfolio, nom_net_learn_theta.portfolio,
-                dr_net_learn_theta.portfolio]
+portfolios = [po_net.portfolio, 
+              base_net.portfolio, 
+              nom_net_learn_theta.portfolio,
+              dr_net_learn_theta.portfolio]
 
+# Out-of-sample summary statistics table
+exp4_fin_table = pf.fin_table(portfolios, portfolio_names)
+
+# Wealth evolution plots
 portfolio_colors = ["forestgreen", "goldenrod", "dodgerblue", "salmon"]
-pf.wealth_plot(portfolio_list, portfolio_names, portfolio_colors, 
+pf.wealth_plot(portfolios, portfolio_names, portfolio_colors, 
                 path=cache_path+"plots/wealth_exp4.pdf")
-pf.sr_bar(portfolio_list, portfolio_names, portfolio_colors, 
+pf.sr_bar(portfolios, portfolio_names, portfolio_colors, 
                 path=cache_path+"plots/sr_bar_exp4.pdf")
 
 # List of initial parameters
@@ -682,37 +639,27 @@ exp5_validation_table.set_axis(['eta', 'Epochs', 'Nom. (linear)', 'DR (linear)',
                             'Nom. (2-layer)', 'DR (2-layer)', 'Nom. (3-layer)', 'DR (3-layer)'],
                             axis=1, inplace=True) 
 
-# Out-of-sample summary statistics table
-portfolios = ["nom_net_linear", "dr_net_linear", "nom_net_2layer", 
-                "dr_net_2layer", "nom_net_3layer", "dr_net_3layer"]
-rets =[]
-vols = []
-SRs = []
-for portfolio in portfolios:
-    ret = (eval(portfolio).portfolio.rets.tri.iloc[-1] ** 
-            (1/eval(portfolio).portfolio.rets.tri.shape[0]))**52 - 1
-    vol = eval(portfolio).portfolio.vol * np.sqrt(52)
-    SR = ret / vol
-    rets.append(round(ret*100, ndigits=1))
-    vols.append(round(vol*100, ndigits=1))
-    SRs.append(round(SR, ndigits=2))
+plt.rcParams['text.usetex'] = True
+portfolio_names = [r'Nom. (linear)', 
+                   r'DR (linear)', 
+                   r'Nom. (2-layer)', 
+                   r'DR (2-layer)', 
+                   r'Nom. (3-layer)', 
+                   r'DR (3-layer)']
+portfolios = [nom_net_linear.portfolio, 
+              dr_net_linear.portfolio, 
+              nom_net_2layer.portfolio,
+              dr_net_2layer.portfolio, 
+              nom_net_3layer.portfolio, 
+              dr_net_3layer.portfolio]
 
-exp5_fin_table  = pd.DataFrame(np.array([rets, vols, SRs]), columns=['Nom. (linear)', 
-                'DR (linear)', 'Nom. (2-layer)', 'DR (2-layer)', 'Nom. (3-layer)', 'DR (3-layer)'])
-exp5_fin_table.set_axis(['Return (%)', 'Volatility (%)', 'Sharpe ratio'], axis=0, inplace=True) 
+# Out-of-sample summary statistics table
+exp5_fin_table = pf.fin_table(portfolios, portfolio_names)
 
 # Wealth evolution plot
-plt.rcParams['text.usetex'] = True
-portfolio_names = [r'Nom. (linear)', r'DR (linear)', r'Nom. (2-layer)', r'DR (2-layer)', 
-                    r'Nom. (3-layer)', r'DR (3-layer)']
-portfolio_list = [nom_net_linear.portfolio, dr_net_linear.portfolio, nom_net_2layer.portfolio,
-                dr_net_2layer.portfolio, nom_net_3layer.portfolio, dr_net_3layer.portfolio]
 portfolio_colors = ["dodgerblue", "salmon", "dodgerblue", "salmon", "dodgerblue", "salmon"]
-pf.wealth_plot(portfolio_list, portfolio_names, portfolio_colors, nplots=3,
+pf.wealth_plot(portfolios, portfolio_names, portfolio_colors, nplots=3,
                 path=cache_path+"plots/wealth_exp5.pdf")
-
-from importlib import reload
-reload(pf)
 
 # List of initial parameters
 exp5_param_dict = dict({'nom_net_linear':nom_net_linear.gamma_init,
