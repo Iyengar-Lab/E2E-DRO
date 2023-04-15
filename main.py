@@ -52,6 +52,9 @@ X, Y = dl.AV(start, end, split, freq=freq, n_obs=n_obs, n_y=n_y, use_cache=True,
 # Number of features and assets
 n_x, n_y = X.data.shape[1], Y.data.shape[1]
 
+# Statistical significance analysis of features vs targets
+stats = dl.statanalysis(X.data, Y.data)
+
 ####################################################################################################
 # E2E Learning System Run
 ####################################################################################################

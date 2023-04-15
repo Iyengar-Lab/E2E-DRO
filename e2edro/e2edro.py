@@ -435,9 +435,9 @@ class e2e_net(nn.Module):
         """Neural net training module
         
         Inputs
-        train_set: SlidingWindow object containing feaatures x, realizations y and performance
+        train_set: SlidingWindow object containing features x, realizations y and performance
         realizations y_perf
-        val_set: SlidingWindow object containing feaatures x, realizations y and performance
+        val_set: SlidingWindow object containing features x, realizations y and performance
         realizations y_perf
         epochs: Number of training epochs
         lr: learning rate

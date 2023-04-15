@@ -5,13 +5,12 @@
 ####################################################################################################
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 import pandas as pd
 import pandas_datareader as pdr
 import numpy as np
 from alpha_vantage.timeseries import TimeSeries
 import time
-from scipy.stats import levy_stable, norm
+import statsmodels.api as sm
 
 ####################################################################################################
 # TrainTest class
@@ -265,36 +264,56 @@ def synthetic_exp(n_x=5, n_y=10, n_tot=1200, n_obs=104, split=[0.6, 0.4], set_se
 # https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html 
 # https://www.alphavantage.co 
 ####################################################################################################
-def AV(start, end, split, freq='weekly', n_obs=104, n_y=None, use_cache=False, save_results=False, 
-        AV_key=None):
-    """Load data from Kenneth French's data library
+def AV(start:str, end:str, split:list, freq:str='weekly', n_obs:int=104, n_y=None, 
+       use_cache:bool=False, save_results:bool=False, AV_key:str=None):
+    """Load data from Kenneth French's data library and from AlphaVantage
     https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/data_library.html 
+    https://www.alphavantage.co 
 
-    Inputs
-    start: start date
-    end: end date
-    split: train-validation-test split as percentages 
-    freq: data frequency (daily, weekly, monthly)
-    n_obs: number of observations per batch
-    use_cache: Boolean. State whether to load cached data or download data
-    save_results: Boolean. State whether the data should be cached for future use. 
+    Parameters
+    ----------
+    start : str
+        Start date of time series.
+    end : str
+        End date of time series.
+    split : list
+        Train-validation-test split as percentages .
+    freq : str, optional
+        Data frequency (daily, weekly, monthly). The default is 'weekly'.
+    n_obs : int, optional
+        Number of observations per batch. The default is 104.
+    n_y : TYPE, optional
+        Number of features to select. If None, the maximum number (8) is used. The default is None.
+    use_cache : bool, optional
+        State whether to load cached data or download data. The default is False.
+    save_results : bool, optional
+        State whether the data should be cached for future use. . The default is False.
+    AV_key : str, optional
+        AlphaVantage user key to access their API. Keys are free for academic users. The default 
+        is None.
 
-    Outputs
-    X: TrainTest object with feature data split into train, validation and test subsets
-    Y: TrainTest object with asset data split into train, validation and test subsets
+    Returns
+    -------
+    X: TrainTest
+        TrainTest object with feature data split into train, validation and test subsets.
+    Y: TrainTest
+        TrainTest object with asset data split into train, validation and test subsets.
     """
 
     if use_cache:
         X = pd.read_pickle('./cache/factor_'+freq+'.pkl')
         Y = pd.read_pickle('./cache/asset_'+freq+'.pkl')
     else:
-        tick_list = ['AAPL', 'MSFT', 'AMZN', 'C', 'JPM', 'BAC', 'XOM', 'HAL', 'MCD', 'WMT', 'COST', 'CAT', 'LMT', 'JNJ', 'PFE', 'DIS', 'VZ', 'T', 'ED', 'NEM']
+        tick_list = ['AAPL', 'MSFT', 'AMZN', 'C', 'JPM', 'BAC', 'XOM', 'HAL', 'MCD', 'WMT', 'COST', 
+                     'CAT', 'LMT', 'JNJ', 'PFE', 'DIS', 'VZ', 'T', 'ED', 'NEM']
 
         if n_y is not None:
             tick_list = tick_list[:n_y]
 
         if AV_key is None:
-            print("""A personal AlphaVantage API key is required to load the asset pricing data. If you do not have a key, you can get one from www.alphavantage.co (free for academic users)""")
+            print("""A personal AlphaVantage API key is required to load the asset pricing data. 
+                  If you do not have a key, you can get one from www.alphavantage.co (free for 
+                  academic users)""")
             AV_key = input("Enter your AlphaVantage API key: ")
 
         ts = TimeSeries(key=AV_key, output_format='pandas', indexing_type='date')
@@ -336,3 +355,35 @@ def AV(start, end, split, freq='weekly', n_obs=104, n_y=None, use_cache=False, s
 
     # Partition dataset into training and testing sets. Lag the data by one observation
     return TrainTest(X[:-1], n_obs, split), TrainTest(Y[1:], n_obs, split)
+
+####################################################################################################
+# stats function
+####################################################################################################
+def statanalysis(X:pd.DataFrame, Y:pd.DataFrame) -> pd.DataFrame:
+    """Conduct a pairwise statistical significance analysis of each feature in X against each asset
+    in Y. 
+
+    Parameters
+    ----------
+    X : pd.DataFrame
+        Timeseries of features.
+    Y : pd.DataFrame
+        Timeseries of asset returns.
+
+    Returns
+    -------
+    stats : pd.DataFrame
+        Table of p-values obtained from regressing each individual feature against each individual 
+        asset.
+
+    """
+    
+    stats = pd.DataFrame(columns=X.columns, index=Y.columns)
+    for ticker in Y.columns:
+        for feature in X.columns:
+            stats.loc[ticker, feature] = sm.OLS(Y[ticker].values, 
+                                                sm.add_constant(X[feature]).values
+                                                ).fit().pvalues[1]
+            
+    return stats.astype(float).round(2)
+    
